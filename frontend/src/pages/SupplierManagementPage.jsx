@@ -9,7 +9,7 @@ import { StatBar } from '../components/StatBar';
 import { SubPartyList } from '../components/SubPartyList';
 import { EntriesTable } from '../components/EntriesTable';
 import { WeightEntryModal } from '../components/WeightEntryModal';
-import { getSupplierById, getEntriesByDate, saveEntry } from '../utils/apiAdapter';
+import { getSupplierById, getEntriesByDate, saveEntry, addSubParty, deleteSubParty } from '../utils/apiAdapter';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
