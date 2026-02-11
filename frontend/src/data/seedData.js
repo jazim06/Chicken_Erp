@@ -70,43 +70,81 @@ export const suppliers = [
 
 export const entries = [];
 
+// Dashboard seed data matching the screenshot exactly
 export const dashboardData = {
-  suppliers: {
-    joseph: {
-      subParties: [
-        { name: 'RMS', a: 150.500, b: 120.250, c: 30.250 },
-        { name: 'Thamim', a: 200.000, b: 180.000, c: 20.000 },
-        { name: 'Anna City', a: 180.750, b: 150.500, c: 30.250 }
-      ],
-      total: { a: 531.250, b: 450.750, c: 80.500 }
+  suppliers: [
+    {
+      id: 'joseph',
+      name: 'Joseph',
+      rows: [
+        { id: 'j1', party: 'RMS', a: 491.9, b: 150.3, c: 341.600 },
+        { id: 'j2', party: 'Thamim', a: 204.4, b: 56.6, c: 147.800 },
+        { id: 'j3', party: 'Irfan', a: 206.5, b: 56.7, c: 149.800 },
+        { id: 'j4', party: 'Rajendran', a: 207.6, b: 56.8, c: 150.800 },
+        { id: 'j5', party: 'BBC', a: 196.7, b: 57.1, c: 139.600 },
+        { id: 'j6', party: 'Parveen', a: 87.3, b: 23.2, c: 64.100 }
+      ]
     },
-    sadiq: {
-      subParties: [
-        { name: 'Party A', a: 100.000, b: 85.000, c: 15.000 },
-        { name: 'Party B', a: 125.500, b: 110.250, c: 15.250 }
-      ],
-      total: { a: 225.500, b: 195.250, c: 30.250 }
-    },
-    other: [
-      { name: 'Iruppu', amount: 45.750 },
-      { name: 'Misc Items', amount: 32.250 }
+    {
+      id: 'sadiq',
+      name: 'Sadiq',
+      rows: [
+        { id: 's1', party: 'RMS', a: 303.8, b: 94.9, c: 208.900 },
+        { id: 's2', party: 'Masthan', a: 202.7, b: 61.9, c: 140.800 }
+      ]
+    }
+  ],
+  otherCalculations: {
+    title: 'Section F',
+    items: [
+      { id: 'o1', name: 'Anas', value: 12.000 },
+      { id: 'o2', name: 'Anna city', value: 51.600 },
+      { id: 'o3', name: 'B. Less', value: 1.800 },
+      { id: 'o4', name: 'Sk', value: 6.800 },
+      { id: 'o5', name: 'RMS', value: 10.000 },
+      { id: 'o6', name: 'Saleem Bhai', value: 16.000 },
+      { id: 'o7', name: 'Ramesh', value: 0.350 },
+      { id: 'o8', name: 'School', value: 0.000 },
+      { id: 'o9', name: '110', value: 9.300 },
+      { id: 'o10', name: 'Daas', value: 2.200 },
+      { id: 'o11', name: 'Mahendran', value: 1.000 }
     ]
   },
-  totals: [
-    { party: 'RMS', weight: 150.500 },
-    { party: 'Thamim', weight: 200.000 },
-    { party: 'Anna City', weight: 180.750, highlight: true },
-    { party: 'Party A', weight: 100.000 },
-    { party: 'Party B', weight: 125.500 },
-    { party: 'Iruppu', weight: 45.750, highlight: true },
-    { party: 'Misc', weight: 32.250 }
+  totalsOverview: [
+    { id: 't1', party: 'Joseph', total: 993.700 },
+    { id: 't2', party: 'Sadiq', total: 349.700 },
+    { id: 't3', party: 'M.Iruppu', total: 38.500 },
+    { id: 't4', party: 'Thamim', total: 137.200, highlight: true },
+    { id: 't5', party: 'Irfan', total: 117.400, highlight: true },
+    { id: 't6', party: 'Rajendran', total: 137.700, highlight: true },
+    { id: 't7', party: 'BBC', total: 128.800, highlight: true },
+    { id: 't8', party: 'Parveen', total: 64.100, highlight: true },
+    { id: 't9', party: 'Masthan', total: 140.800 },
+    { id: 't10', party: 'Al Ayaan', total: 14.900 },
+    { id: 't11', party: 'MBB', total: 56.400 },
+    { id: 't12', party: 'F', total: 151.500, highlight: true },
+    { id: 't13', party: 'Anas', total: 64.800 },
+    { id: 't14', party: 'Iruppu', total: 15.000 }
   ],
-  subtotal: 834.750,
   financial: [
-    { name: 'Joseph', amount: 257824 },
-    { name: 'Sadiq', amount: 125430 },
-    { name: 'Other Expenses', amount: 45600 },
-    { name: 'Transport', amount: 12500 }
-  ],
-  grandTotal: 441354
+    { id: 'f1', name: 'RMS', amount: 73700 },
+    { id: 'f2', name: 'Thamim', amount: 24284 },
+    { id: 'f3', name: 'Irfan', amount: 20780 },
+    { id: 'f4', name: 'Rajendran', amount: 24373 },
+    { id: 'f5', name: 'BBC', amount: 22798 },
+    { id: 'f6', name: 'Parveen', amount: 11153 },
+    { id: 'f7', name: 'Masthan', amount: 24922 },
+    { id: 'f8', name: 'MBB', amount: 11030 },
+    { id: 'f9', name: 'Al Ayaan', amount: 2915 },
+    { id: 'f10', name: 'Anas', amount: 16330 },
+    { id: 'f11', name: 'Anna city', amount: 14009, highlight: true },
+    { id: 'f12', name: 'B. Less', amount: 576 },
+    { id: 'f13', name: 'Saleem Bhai', amount: 4659 },
+    { id: 'f14', name: 'Ramesh', amount: 100 },
+    { id: 'f15', name: 'School', amount: 0 },
+    { id: 'f16', name: '110', amount: 3330 },
+    { id: 'f17', name: 'Daas', amount: 0 },
+    { id: 'f18', name: 'Mahendran', amount: 360 },
+    { id: 'f19', name: 'Iruppu', amount: 2505, highlight: true }
+  ]
 };

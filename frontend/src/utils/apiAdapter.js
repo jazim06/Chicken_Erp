@@ -4,6 +4,7 @@ import { users, products, suppliers, entries, dashboardData } from '../data/seed
 // In-memory state management (for prototype)
 let currentUser = null;
 let entriesData = [...entries];
+let dashboardState = JSON.parse(JSON.stringify(dashboardData));
 
 // Helper to format currency
 export const formatCurrency = (amount) => {
@@ -91,6 +92,37 @@ export const createSupplier = async (supplierData) => {
   });
 };
 
+// Sub-Party APIs
+export const addSubParty = async (supplierId, partyName) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const supplier = suppliers.find(s => s.id === parseInt(supplierId));
+      if (supplier) {
+        const newSubParty = {
+          id: Date.now(),
+          name: partyName,
+          todayWeight: 0,
+          totalWeight: 0
+        };
+        supplier.subParties.push(newSubParty);
+        resolve(newSubParty);
+      }
+    }, 300);
+  });
+};
+
+export const deleteSubParty = async (supplierId, subPartyId) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const supplier = suppliers.find(s => s.id === parseInt(supplierId));
+      if (supplier) {
+        supplier.subParties = supplier.subParties.filter(sp => sp.id !== subPartyId);
+        resolve({ success: true });
+      }
+    }, 300);
+  });
+};
+
 // Entry APIs
 export const getEntriesByDate = async (supplierId, date) => {
   return new Promise((resolve) => {
@@ -132,7 +164,105 @@ export const saveEntry = async (entryData) => {
 export const getDashboardData = async (supplierId) => {
   return new Promise((resolve) => {
     setTimeout(() => {
-      resolve(dashboardData);
+      resolve(JSON.parse(JSON.stringify(dashboardState)));
     }, 500);
+  });
+};
+
+export const updateDashboardEntry = async (type, id, field, value) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (type === 'supplier') {
+        const supplier = dashboardState.suppliers.find(s => s.id === id);
+        if (supplier) {
+          const row = supplier.rows.find(r => r.id === field.rowId);
+          if (row) {
+            row[field.column] = parseFloat(value);
+          }
+        }
+      } else if (type === 'other') {
+        const item = dashboardState.otherCalculations.items.find(i => i.id === id);
+        if (item) {
+          item.value = parseFloat(value);
+        }
+      } else if (type === 'totals') {
+        const total = dashboardState.totalsOverview.find(t => t.id === id);
+        if (total) {
+          total.total = parseFloat(value);
+        }
+      } else if (type === 'financial') {
+        const fin = dashboardState.financial.find(f => f.id === id);
+        if (fin) {
+          fin.amount = parseFloat(value);
+        }
+      }
+      resolve(dashboardState);
+    }, 300);
+  });
+};
+
+export const createDashboardEntry = async (type, data) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const newId = `new_${Date.now()}`;
+      
+      if (type === 'supplier') {
+        const supplier = dashboardState.suppliers.find(s => s.id === data.supplierId);
+        if (supplier) {
+          const newRow = {
+            id: newId,
+            party: data.party,
+            a: parseFloat(data.a) || 0,
+            b: parseFloat(data.b) || 0,
+            c: parseFloat(data.c) || 0
+          };
+          supplier.rows.push(newRow);
+        }
+      } else if (type === 'other') {
+        dashboardState.otherCalculations.items.push({
+          id: newId,
+          name: data.name,
+          value: parseFloat(data.value) || 0
+        });
+      } else if (type === 'totals') {
+        dashboardState.totalsOverview.push({
+          id: newId,
+          party: data.party,
+          total: parseFloat(data.total) || 0,
+          highlight: false
+        });
+      } else if (type === 'financial') {
+        dashboardState.financial.push({
+          id: newId,
+          name: data.name,
+          amount: parseFloat(data.amount) || 0,
+          highlight: false
+        });
+      }
+      
+      resolve(dashboardState);
+    }, 300);
+  });
+};
+
+export const deleteDashboardEntry = async (type, id) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (type === 'supplier') {
+        dashboardState.suppliers.forEach(supplier => {
+          supplier.rows = supplier.rows.filter(r => r.id !== id);
+        });
+      } else if (type === 'other') {
+        dashboardState.otherCalculations.items = 
+          dashboardState.otherCalculations.items.filter(i => i.id !== id);
+      } else if (type === 'totals') {
+        dashboardState.totalsOverview = 
+          dashboardState.totalsOverview.filter(t => t.id !== id);
+      } else if (type === 'financial') {
+        dashboardState.financial = 
+          dashboardState.financial.filter(f => f.id !== id);
+      }
+      resolve(dashboardState);
+    }, 300);
   });
 };
