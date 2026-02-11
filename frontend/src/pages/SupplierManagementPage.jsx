@@ -79,6 +79,28 @@ const SupplierManagementPage = () => {
     }
   };
 
+  const handleAddSubParty = async (partyName) => {
+    try {
+      await addSubParty(id, partyName);
+      toast.success('Sub-party added successfully!');
+      await loadSupplierData();
+    } catch (error) {
+      console.error('Failed to add sub-party:', error);
+      toast.error('Failed to add sub-party');
+    }
+  };
+
+  const handleDeleteSubParty = async (subPartyId) => {
+    try {
+      await deleteSubParty(id, subPartyId);
+      toast.success('Sub-party deleted successfully!');
+      await loadSupplierData();
+    } catch (error) {
+      console.error('Failed to delete sub-party:', error);
+      toast.error('Failed to delete sub-party');
+    }
+  };
+
   const totalWeight = supplier?.subParties.reduce((sum, party) => sum + party.todayWeight, 0) || 0;
   const activeParties = supplier?.subParties.filter(p => p.todayWeight > 0).length || 0;
 
