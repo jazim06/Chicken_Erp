@@ -198,6 +198,8 @@ const SupplierManagementPage = () => {
             <SubPartyList
               subParties={supplier.subParties}
               onAddEntry={handleAddEntry}
+              onAddSubParty={handleAddSubParty}
+              onDeleteSubParty={handleDeleteSubParty}
             />
           </div>
 
