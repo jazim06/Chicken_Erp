@@ -1,0 +1,209 @@
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Montserrat:wght@700&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        /* ERP-specific color system - HSL format */
+        --background: 210 17% 98%; /* #f6f7f9 */
+        --foreground: 210 50% 8%; /* #0b1720 - dark text */
+        
+        /* Primary Orange Accent */
+        --primary: 27 94% 48%; /* #f57c00 - vibrant orange */
+        --primary-foreground: 0 0% 100%; /* white */
+        --primary-hover: 27 94% 42%; /* darker orange */
+        
+        /* Cards and surfaces */
+        --card: 0 0% 100%; /* white */
+        --card-foreground: 210 50% 8%; /* #0b1720 */
+        
+        /* Navy gradient for stat bars */
+        --navy-start: 210 45% 22%; /* #283d50 */
+        --navy-end: 210 50% 15%; /* #1a2b3a */
+        
+        /* Success green */
+        --success: 156 63% 42%; /* #17b978 */
+        --success-foreground: 0 0% 100%;
+        
+        /* Muted text */
+        --muted: 210 10% 92%; /* light gray backgrounds */
+        --muted-foreground: 210 8% 50%; /* #7a7f85 - muted text */
+        
+        /* Destructive/Alert (for highlighted rows) */
+        --destructive: 0 84% 60%;
+        --destructive-foreground: 0 0% 100%;
+        
+        /* Borders and inputs */
+        --border: 210 15% 88%;
+        --input: 210 15% 94%;
+        --ring: 27 94% 48%; /* orange focus ring */
+        
+        /* Secondary */
+        --secondary: 210 15% 95%;
+        --secondary-foreground: 210 50% 8%;
+        
+        /* Accent */
+        --accent: 210 15% 95%;
+        --accent-foreground: 210 50% 8%;
+        
+        /* Popover */
+        --popover: 0 0% 100%;
+        --popover-foreground: 210 50% 8%;
+        
+        /* Border radius */
+        --radius: 0.75rem; /* 12px */
+        
+        /* Custom shadows */
+        --shadow-card: 0 10px 20px rgba(11, 17, 32, 0.08);
+        --shadow-elevated: 0 15px 35px rgba(11, 17, 32, 0.12);
+        
+        /* Transitions */
+        --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .dark {
+        --background: 210 40% 8%;
+        --foreground: 0 0% 98%;
+        --card: 210 35% 10%;
+        --card-foreground: 0 0% 98%;
+        --primary: 27 94% 55%;
+        --primary-foreground: 0 0% 100%;
+        --primary-hover: 27 94% 48%;
+        --secondary: 210 30% 14%;
+        --secondary-foreground: 0 0% 98%;
+        --muted: 210 30% 14%;
+        --muted-foreground: 210 15% 60%;
+        --accent: 210 30% 14%;
+        --accent-foreground: 0 0% 98%;
+        --destructive: 0 62% 40%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 210 30% 18%;
+        --input: 210 30% 18%;
+        --ring: 27 94% 55%;
+        --popover: 210 35% 10%;
+        --popover-foreground: 0 0% 98%;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    
+    body {
+        @apply bg-background text-foreground;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+    
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Oswald', 'Montserrat', sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+    }
+    
+    /* Remove default transitions on transforms to avoid breaking animations */
+    button, input, select, textarea {
+        transition: background-color var(--transition-smooth),
+                    border-color var(--transition-smooth),
+                    color var(--transition-smooth),
+                    box-shadow var(--transition-smooth),
+                    opacity var(--transition-smooth);
+    }
+}
+
+@layer components {
+    /* Navy gradient stat bar */
+    .stat-bar-gradient {
+        background: linear-gradient(135deg, hsl(var(--navy-start)), hsl(var(--navy-end)));
+    }
+    
+    /* Card with custom shadow */
+    .card-elevated {
+        box-shadow: var(--shadow-card);
+        transition: transform var(--transition-smooth), box-shadow var(--transition-smooth);
+    }
+    
+    .card-elevated:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-elevated);
+    }
+    
+    /* Number formatting for weights */
+    .weight-display {
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.02em;
+    }
+    
+    /* Login background */
+    .login-background {
+        background-image: url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=2670');
+        background-size: cover;
+        background-position: center;
+        position: relative;
+    }
+    
+    .login-background::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(135deg, rgba(11, 17, 32, 0.85), rgba(11, 17, 32, 0.7));
+    }
+}
+
+@layer utilities {
+    /* Custom focus ring */
+    .focus-ring {
+        @apply focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2;
+    }
+    
+    /* Hover lift effect */
+    .hover-lift {
+        transition: transform var(--transition-smooth), box-shadow var(--transition-smooth);
+    }
+    
+    .hover-lift:hover {
+        transform: translateY(-4px);
+    }
+    
+    /* Smooth transitions */
+    .transition-smooth {
+        transition: all var(--transition-smooth);
+    }
+}
+
+/* Debug wrapper utility */
+@layer base {
+    [data-debug-wrapper="true"] {
+        display: contents !important;
+    }
+
+    [data-debug-wrapper="true"] > * {
+        margin-left: inherit;
+        margin-right: inherit;
+        margin-top: inherit;
+        margin-bottom: inherit;
+        padding-left: inherit;
+        padding-right: inherit;
+        padding-top: inherit;
+        padding-bottom: inherit;
+        column-gap: inherit;
+        row-gap: inherit;
+        gap: inherit;
+        border-left-width: inherit;
+        border-right-width: inherit;
+        border-top-width: inherit;
+        border-bottom-width: inherit;
+        border-left-style: inherit;
+        border-right-style: inherit;
+        border-top-style: inherit;
+        border-bottom-style: inherit;
+        border-left-color: inherit;
+        border-right-color: inherit;
+        border-top-color: inherit;
+        border-bottom-color: inherit;
+    }
+}
