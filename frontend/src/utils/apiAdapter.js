@@ -227,15 +227,16 @@ export const createDashboardEntry = async (type, data) => {
       } else if (type === 'totals') {
         dashboardState.totalsOverview.push({
           id: newId,
-          party: data.party,
-          total: parseFloat(data.total) || 0,
+          party: data.name,
+          total: parseFloat(data.value) || 0,
           highlight: false
         });
       } else if (type === 'financial') {
         dashboardState.financial.push({
           id: newId,
           name: data.name,
-          amount: parseFloat(data.amount) || 0,
+          amount: parseFloat(data.amount || data.value) || 0,
+          formula: data.formula || null,
           highlight: false
         });
       }
