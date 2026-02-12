@@ -132,19 +132,19 @@ export const dashboardData = {
     { id: 'f3', name: 'Irfan', amount: 20780 },
     { id: 'f4', name: 'Rajendran', amount: 24373 },
     { id: 'f5', name: 'BBC', amount: 22798 },
-    { id: 'f6', name: 'Parveen', amount: 11153 },
+    { id: 'f6', name: 'Parveen', amount: 11153, formula: '((PR-3) X W)' },
     { id: 'f7', name: 'Masthan', amount: 24922 },
     { id: 'f8', name: 'MBB', amount: 11030 },
-    { id: 'f9', name: 'Al Ayaan', amount: 2915 },
+    { id: 'f9', name: 'Al Ayaan', amount: 2915, formula: '((W X PR))' },
     { id: 'f10', name: 'Anas', amount: 16330 },
     { id: 'f11', name: 'Anna city', amount: 14009, highlight: true },
     { id: 'f12', name: 'B. Less', amount: 576 },
-    { id: 'f13', name: 'Saleem Bhai', amount: 4659 },
+    { id: 'f13', name: 'Saleem Bhai', amount: 4659, formula: '((M X 1.5) + (PR X W))' },
     { id: 'f14', name: 'Ramesh', amount: 100 },
-    { id: 'f15', name: 'School', amount: 0 },
+    { id: 'f15', name: 'School', amount: 0, formula: '((W X PR))' },
     { id: 'f16', name: '110', amount: 3330 },
     { id: 'f17', name: 'Daas', amount: 0 },
     { id: 'f18', name: 'Mahendran', amount: 360 },
-    { id: 'f19', name: 'Iruppu', amount: 2505, highlight: true }
+    { id: 'f19', name: 'Iruppu', amount: -2505, highlight: true }
   ]
 };
