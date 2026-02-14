@@ -149,8 +149,7 @@ const SupplierDashboardPage = () => {
   };
 
   const calculateGrandTotal = () => {
-    if (!dashboardData?.financial) return 0;
-    return dashboardData.financial.reduce((sum, item) => sum + (item.amount || 0), 0);
+    return dashboardData?.financialTotal || 0;
   };
 
   const calculateTotalBalance = () => {
@@ -404,67 +403,43 @@ const SupplierDashboardPage = () => {
             <Card className="p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Financial Breakdown</h2>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => { setAddEntryType('financial'); setAddModalOpen(true); }}
-                    className="h-7 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Add Entry
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setAddFormulaModalOpen(true)}
-                    className="h-7 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Formula
-                  </Button>
-                </div>
               </div>
               <div className="space-y-0.5">
                 <div className="flex items-center justify-between py-2 border-b border-gray-200 font-semibold text-xs text-gray-600">
                   <span>NAME</span>
-                  <span>AMOUNT (₹)</span>
+                  <span className="text-right">WEIGHT</span>
+                  <span className="text-right">AMOUNT (₹)</span>
                 </div>
-                {dashboardData?.financial?.map((item) => {
-                  const isNegative = item.amount < 0;
-                  return (
-                    <div
-                      key={item.id}
-                      className={cn(
-                        "flex items-center justify-between py-2 border-b border-gray-100 text-sm hover:bg-gray-50",
-                        item.highlight && !isNegative && "bg-blue-50/50",
-                        isNegative && "bg-red-50/50"
-                      )}
-                    >
-                      <div className="flex items-center gap-2 px-2">
-                        <span className={cn("text-gray-900", isNegative && "text-red-600")}>{item.name}</span>
-                        {item.formula && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-600">
-                            fx
+                {(() => {
+                  // Group financial entries by supplier
+                  const grouped = {};
+                  (dashboardData?.financial || []).forEach(item => {
+                    const key = item.supplierName || 'Other';
+                    if (!grouped[key]) grouped[key] = [];
+                    grouped[key].push(item);
+                  });
+                  return Object.entries(grouped).map(([supplierName, items]) => (
+                    <div key={supplierName}>
+                      <div className="py-1.5 px-2 text-xs font-bold text-gray-500 uppercase tracking-wider bg-gray-50 mt-1">
+                        {supplierName}
+                      </div>
+                      {items.map(item => (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between py-2 border-b border-gray-100 text-sm hover:bg-gray-50"
+                        >
+                          <span className="text-gray-900 px-2 flex-1">{item.name}</span>
+                          <span className="text-gray-600 px-2 font-mono text-xs w-20 text-right">
+                            {formatWeight(item.weight)}
                           </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 px-2">
-                        {item.formula && (
-                          <span className="text-xs text-gray-500 font-mono">{item.formula}</span>
-                        )}
-                        <EditableCell
-                          value={item.amount}
-                          type="financial"
-                          itemId={item.id}
-                          field="amount"
-                          decimals={0}
-                          isAmount
-                        />
-                      </div>
+                          <span className="text-gray-900 px-2 font-mono text-right w-24">
+                            {formatCurrency(item.amount)}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  );
-                })}
+                  ));
+                })()}
               </div>
             </Card>
 
@@ -501,8 +476,7 @@ const SupplierDashboardPage = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="totals">Totals Overview</SelectItem>
-                  <SelectItem value="financial">Financial Entry</SelectItem>
-                  <SelectItem value="other">Other Calculation</SelectItem>
+                  <SelectItem value="other">Other Calculation (Section F)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -518,13 +492,13 @@ const SupplierDashboardPage = () => {
 
             <div className="space-y-2">
               <Label className="text-sm font-medium">
-                {addEntryType === 'financial' ? 'Amount' : 'Value'}
+                {addEntryType === 'other' ? 'Actual Weight (kg)' : 'Value'}
               </Label>
               <Input
                 type="number"
                 value={addEntryData.value}
                 onChange={(e) => setAddEntryData({ ...addEntryData, value: e.target.value })}
-                placeholder="Enter value"
+                placeholder={addEntryType === 'other' ? 'Enter actual weight' : 'Enter value'}
                 step="0.001"
               />
             </div>

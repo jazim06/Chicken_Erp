@@ -64,8 +64,8 @@ const SupplierManagementPage = () => {
   const handleSaveEntry = async (entryData) => {
     try {
       await saveEntry({
-        supplierId: parseInt(id),
-        subPartyId: selectedParty.id,
+        supplierId: id,
+        partyId: selectedParty.id,
         partyName: selectedParty.name,
         date: format(selectedDate, 'yyyy-MM-dd'),
         ...entryData
