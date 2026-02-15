@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import get_current_user, get_optional_user
+from cache import cache_stats
 from firebase_client import initialize_firebase
 from models import (
     DeductionEntryCreate,
@@ -119,6 +120,12 @@ logger = logging.getLogger(__name__)
 @app.get("/api")
 async def root():
     return {"message": "Chicken ERP API is running"}
+
+
+@app.get("/api/cache-stats")
+async def get_cache_stats():
+    """Return cache statistics for debugging."""
+    return cache_stats()
 
 
 # ===================================================================
@@ -485,3 +492,36 @@ async def remove_deduction_entry(entry_id: str, user: dict = Depends(get_current
         return {"success": True}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/deduction-entries/bulk", status_code=201)
+async def bulk_update_deductions(
+    request: Request,
+    user: dict = Depends(get_current_user)
+):
+    """Replace all deductions for a date with new batch."""
+    data = await request.json()
+    date = data.get("date")
+    deductions = data.get("deductions", [])
+    
+    if not date:
+        raise HTTPException(400, "date required")
+    
+    # Delete existing deductions for this date
+    existing = get_deduction_entries(date)
+    for ded in existing:
+        delete_deduction_entry(ded["id"])
+    
+    # Create new deductions
+    created = []
+    for ded in deductions:
+        entry = create_deduction_entry({
+            "partyName": ded["partyName"],
+            "supplierId": "",
+            "supplierName": "",
+            "amount": ded["amount"],
+            "date": date,
+        })
+        created.append(entry)
+    
+    return {"success": True, "count": len(created)}

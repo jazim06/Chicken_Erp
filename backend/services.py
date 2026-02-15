@@ -144,10 +144,11 @@ def get_effective_rate(product_type_id: str, date: str) -> float:
 
 
 def create_price_rate(data: dict) -> str:
-    """Create a new price rate entry and invalidate rate cache."""
+    """Create a new price rate entry and invalidate rate + dashboard cache."""
     data["createdAt"] = datetime.now(timezone.utc).isoformat()
     doc_id = create_document(PRICE_RATES, data)
     cache_invalidate("rate:")
+    cache_invalidate("dashboard:")
     return doc_id
 
 
@@ -180,6 +181,9 @@ def create_weight_entry(data: dict, user_id: str | None = None) -> dict:
     }
     doc_id = create_document(WEIGHT_ENTRIES, doc)
     doc["id"] = doc_id
+    cache_invalidate("dashboard:")
+    cache_invalidate("weight_entries:")
+    cache_invalidate(f"supplier:{data['supplierId']}:")
     return doc
 
 
@@ -209,6 +213,9 @@ def update_weight_entry(entry_id: str, data: dict) -> dict:
 
     update_document(WEIGHT_ENTRIES, entry_id, updates)
     existing.update(updates)
+    cache_invalidate("dashboard:")
+    cache_invalidate("weight_entries:")
+    cache_invalidate(f"supplier:{existing['supplierId']}:")
     return existing
 
 
@@ -222,10 +229,17 @@ def soft_delete_weight_entry(entry_id: str) -> None:
 
 def get_weight_entries(date: str, supplier_id: str | None = None) -> list[dict]:
     """Return weight entries for a date, optionally filtered by supplier."""
+    cache_key = f"weight_entries:{date}:{supplier_id or 'all'}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
     filters = [("date", "==", date), ("isDeleted", "==", False)]
     if supplier_id:
         filters.append(("supplierId", "==", supplier_id))
-    return list_documents(WEIGHT_ENTRIES, filters=filters)
+    entries = list_documents(WEIGHT_ENTRIES, filters=filters)
+    cache_set(cache_key, entries, ttl_seconds=180)
+    return entries
 
 
 # ===================================================================
@@ -531,6 +545,7 @@ def create_deduction_entry(data: dict) -> dict:
     }
     doc_id = create_document(DEDUCTION_ENTRIES, doc)
     doc["id"] = doc_id
+    cache_invalidate("dashboard:")
     return doc
 
 
@@ -565,6 +580,7 @@ def delete_deduction_entry(entry_id: str) -> None:
     if not existing:
         raise LookupError(f"Deduction entry {entry_id} not found")
     delete_document(DEDUCTION_ENTRIES, entry_id)
+    cache_invalidate("dashboard:")
 
 
 # ===================================================================
@@ -579,6 +595,11 @@ def get_all_products() -> list[dict]:
 
 def get_all_suppliers(product_type: str | None = None) -> list[dict]:
     """Return suppliers, optionally filtered by productType. Falls back to hardcoded seed data if Firestore is empty."""
+    cache_key = f"suppliers:{product_type or 'all'}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
     filters = []
     if product_type:
         filters.append(("productType", "==", product_type))
@@ -599,11 +620,18 @@ def get_all_suppliers(product_type: str | None = None) -> list[dict]:
             )
             s["subParties"] = subs
     
+    cache_set(cache_key, suppliers, ttl_seconds=300)
     return suppliers
 
 
 def get_supplier(supplier_id: str) -> dict | None:
     """Return a single supplier with sub-parties and today's weight computed from entries."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cache_key = f"supplier:{supplier_id}:{today}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    
     supplier = get_document(SUPPLIERS, supplier_id)
     if supplier:
         subs = list_documents(
@@ -611,7 +639,6 @@ def get_supplier(supplier_id: str) -> dict | None:
             filters=[("supplierId", "==", supplier_id)],
         )
         # Compute todayWeight from actual weight entries
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         today_entries = get_weight_entries(today, supplier_id=supplier_id)
         # Build a mapping partyId → total live weight
         party_weights = {}
@@ -621,6 +648,7 @@ def get_supplier(supplier_id: str) -> dict | None:
         for sub in subs:
             sub["todayWeight"] = round(party_weights.get(sub["id"], 0), 3)
         supplier["subParties"] = subs
+        cache_set(cache_key, supplier, ttl_seconds=120)
     return supplier
 
 
@@ -635,6 +663,7 @@ def create_supplier(data: dict) -> dict:
     doc_id = create_document(SUPPLIERS, doc)
     doc["id"] = doc_id
     doc["subParties"] = []
+    cache_invalidate("suppliers:")
     return doc
 
 
@@ -653,6 +682,8 @@ def add_sub_party(supplier_id: str, party_name: str) -> dict:
     }
     doc_id = create_document(SUB_PARTIES, doc)
     doc["id"] = doc_id
+    cache_invalidate("suppliers:")
+    cache_invalidate(f"supplier:{supplier_id}:")
     return doc
 
 
@@ -662,6 +693,8 @@ def delete_sub_party(supplier_id: str, sub_party_id: str) -> None:
     if not existing or existing.get("supplierId") != supplier_id:
         raise LookupError(f"Sub-party {sub_party_id} not found under supplier {supplier_id}")
     delete_document(SUB_PARTIES, sub_party_id)
+    cache_invalidate("suppliers:")
+    cache_invalidate(f"supplier:{supplier_id}:")
 
 
 # ===================================================================
@@ -675,6 +708,7 @@ def save_daily_carryover(date: str, balance: float) -> None:
         update_document("daily_carryover", docs[0]["id"], {"balance": balance})
     else:
         create_document("daily_carryover", {"date": date, "balance": balance})
+    cache_invalidate("dashboard:")
 
 
 # ===================================================================
@@ -762,7 +796,15 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     Orchestrates: supplier totals → totals overview → financial breakdown
     → section F → grand total.
     Uses parallel queries to reduce latency.
+    Results are cached for 30s to avoid repeated Firestore round-trips.
     """
+    # ── Check dashboard cache first ──
+    cache_key = f"dashboard:{product_type}:{date}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        logger.info("Dashboard served from cache: %s", cache_key)
+        return cached
+
     # ── Parallel I/O phase: fire independent queries concurrently ──
     with ThreadPoolExecutor(max_workers=4) as pool:
         f_rate = pool.submit(get_effective_rate, product_type, date)
@@ -906,7 +948,7 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         "items": other_items,
     }
 
-    return {
+    result = {
         "date": date,
         "effectivePrRate": rate,
         "suppliers": supplier_totals,
@@ -922,3 +964,8 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         "grandTotal": grand_total,
         "totalBalance": totals["totalBalance"],
     }
+
+    # Cache the full dashboard result for 30 seconds
+    cache_set(cache_key, result, ttl_seconds=30)
+    logger.info("Dashboard cached: %s", cache_key)
+    return result

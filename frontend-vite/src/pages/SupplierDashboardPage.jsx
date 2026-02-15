@@ -43,7 +43,6 @@ const SupplierDashboardPage = () => {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addFormulaModalOpen, setAddFormulaModalOpen] = useState(false);
-  const [deductionModalOpen, setDeductionModalOpen] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState('');
 
@@ -54,9 +53,10 @@ const SupplierDashboardPage = () => {
   // Add formula form state
   const [formulaData, setFormulaData] = useState({ name: '', formula: '', value: '' });
 
-  // Deduction form state
-  const [deductionData, setDeductionData] = useState({ partyName: '', amount: '' });
-  const [deductionCustomParty, setDeductionCustomParty] = useState('');
+  // Bulk deduction editing state
+  const [deductionValues, setDeductionValues] = useState({});
+  const [customParties, setCustomParties] = useState([]);
+  const [savingDeductions, setSavingDeductions] = useState(false);
   const [yesterdayStock, setYesterdayStock] = useState('');
   const [savingStock, setSavingStock] = useState(false);
 
@@ -67,7 +67,7 @@ const SupplierDashboardPage = () => {
   // Hardcoded deduction party list
   const DEDUCTION_PARTIES = [
     'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
-    'Masthan', 'AL Ayaan', 'MBB', 'F', 'Anas'
+    'Masthan', 'AL Ayaan', 'MBB', 'F', 'Anas', 'Iruppu'
   ];
 
   const dateStr = format(selectedDate, 'yyyy-MM-dd');
@@ -81,6 +81,23 @@ const SupplierDashboardPage = () => {
     if (dashboardData) {
       const stockItem = dashboardData.totalsOverview?.find(i => i.id === 'yesterday_stock');
       setYesterdayStock(stockItem?.total || 0);
+    }
+  }, [dashboardData]);
+
+  // Sync deduction values from dashboard data
+  useEffect(() => {
+    if (dashboardData?.deductions) {
+      const values = {};
+      const customPartiesFromData = [];
+      dashboardData.deductions.forEach(ded => {
+        values[ded.partyName] = ded.amount;
+        // Track custom parties (not in hardcoded list)
+        if (!DEDUCTION_PARTIES.includes(ded.partyName)) {
+          customPartiesFromData.push(ded.partyName);
+        }
+      });
+      setDeductionValues(values);
+      setCustomParties(customPartiesFromData);
     }
   }, [dashboardData]);
 
@@ -162,41 +179,56 @@ const SupplierDashboardPage = () => {
     }
   };
 
-  const handleAddDeduction = async () => {
-    const finalPartyName = deductionCustomParty.trim() || deductionData.partyName;
-    const deductionAmount = parseFloat(deductionData.amount) || 0;
-    const tempId = `temp-${Date.now()}`;
+  const handleAddCustomParty = () => {
+    const partyName = prompt('Enter custom party name:');
+    if (partyName && partyName.trim()) {
+      const trimmedName = partyName.trim();
+      if (!DEDUCTION_PARTIES.includes(trimmedName) && !customParties.includes(trimmedName)) {
+        setCustomParties(prev => [...prev, trimmedName]);
+        toast.success(`Added custom party: ${trimmedName}`);
+      } else {
+        toast.error('Party already exists');
+      }
+    }
+  };
 
-    // Optimistic UI update
-    setDashboardData(prev => ({
-      ...prev,
-      deductions: [...(prev?.deductions || []), { id: tempId, partyName: finalPartyName, amount: deductionAmount }],
-      totalDeductions: (prev?.totalDeductions || 0) + deductionAmount,
-      totalBalance: (prev?.totalBalance || 0) - deductionAmount,
-    }));
-    setDeductionModalOpen(false);
-    setDeductionData({ partyName: '', amount: '' });
-    setDeductionCustomParty('');
+  const handleRemoveCustomParty = (partyName) => {
+    setCustomParties(prev => prev.filter(p => p !== partyName));
+    setDeductionValues(prev => {
+      const newValues = { ...prev };
+      delete newValues[partyName];
+      return newValues;
+    });
+  };
 
+  const handleSaveAllDeductions = async () => {
+    setSavingDeductions(true);
     try {
-      await createDeductionEntry({
-        partyName: finalPartyName,
-        supplierId: '',
-        supplierName: '',
-        amount: deductionAmount,
-        date: dateStr,
+      // Filter out zero/empty values and prepare payload
+      const deductions = Object.entries(deductionValues)
+        .filter(([_, amount]) => amount && parseFloat(amount) > 0)
+        .map(([partyName, amount]) => ({
+          partyName,
+          amount: parseFloat(amount),
+          date: dateStr,
+        }));
+
+      // Call bulk API endpoint
+      await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/deduction-entries/bulk`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer dev-hardcoded-token',
+        },
+        body: JSON.stringify({ date: dateStr, deductions }),
       });
-      await loadDashboard(); // Sync real IDs
-      toast.success('Deduction added successfully');
+
+      await loadDashboard();
+      toast.success('Deductions saved successfully');
     } catch (error) {
-      // Rollback optimistic update
-      setDashboardData(prev => ({
-        ...prev,
-        deductions: (prev?.deductions || []).filter(d => d.id !== tempId),
-        totalDeductions: (prev?.totalDeductions || 0) - deductionAmount,
-        totalBalance: (prev?.totalBalance || 0) + deductionAmount,
-      }));
-      toast.error('Failed to add deduction');
+      toast.error('Failed to save deductions');
+    } finally {
+      setSavingDeductions(false);
     }
   };
 
@@ -213,29 +245,7 @@ const SupplierDashboardPage = () => {
     }
   };
 
-  const handleDeleteDeduction = async (deductionId) => {
-    // Capture for rollback
-    const prev = dashboardData;
-    const removed = prev?.deductions?.find(d => d.id === deductionId);
-    const amt = removed?.amount || 0;
 
-    // Optimistic remove
-    setDashboardData(p => ({
-      ...p,
-      deductions: (p?.deductions || []).filter(d => d.id !== deductionId),
-      totalDeductions: (p?.totalDeductions || 0) - amt,
-      totalBalance: (p?.totalBalance || 0) + amt,
-    }));
-
-    try {
-      await deleteDeductionEntry(deductionId);
-      await loadDashboard();
-      toast.success('Deduction removed');
-    } catch (error) {
-      setDashboardData(prev); // Rollback
-      toast.error('Failed to remove deduction');
-    }
-  };
 
   const handleAddFormula = async () => {
     try {
@@ -632,50 +642,85 @@ const SupplierDashboardPage = () => {
                 </div>
               </div>
 
-              {/* Deductions Section */}
+              {/* Deductions Section - Bulk Edit */}
               <div className="mt-4 pt-3 border-t border-gray-200">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-3">
                   <h3 className="text-xs font-semibold text-red-600 uppercase tracking-wider">Deductions</h3>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeductionModalOpen(true)}
-                    className="h-7 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Add
-                  </Button>
-                </div>
-                {(dashboardData?.deductions || []).length === 0 ? (
-                  <p className="text-xs text-gray-400 italic px-2 py-1">No deductions added</p>
-                ) : (
-                  <div className="space-y-0.5">
-                    {(dashboardData?.deductions || []).map((ded) => (
-                      <div
-                        key={ded.id}
-                        className="flex items-center justify-between py-1.5 border-b border-gray-100 text-sm group"
-                      >
-                        <div className="flex items-center gap-2 px-2">
-                          <span className="text-red-600">{ded.partyName}</span>
-                          <span className="text-xs text-gray-400">({ded.supplierName})</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-red-600 px-2">-{formatWeight(ded.amount)}</span>
-                          <button
-                            onClick={() => handleDeleteDeduction(ded.id)}
-                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    <div className="flex items-center justify-between py-2 bg-red-50 font-bold text-sm rounded mt-1">
-                      <span className="px-2 text-red-600 uppercase text-xs tracking-wider">Total Deductions</span>
-                      <span className="font-mono px-2 text-red-600">-{formatWeight(dashboardData?.totalDeductions || 0)}</span>
-                    </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleAddCustomParty}
+                      className="h-7 px-2 text-xs text-red-600 hover:text-red-700 border-red-200 hover:bg-red-50"
+                    >
+                      <Plus className="h-3 w-3 mr-1" />
+                      Add Entry
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleSaveAllDeductions}
+                      disabled={savingDeductions}
+                      className="h-7 px-3 text-xs bg-red-600 hover:bg-red-700 text-white"
+                    >
+                      {savingDeductions ? 'Saving...' : 'Save All'}
+                    </Button>
                   </div>
-                )}
+                </div>
+                
+                <div className="space-y-1 max-h-96 overflow-y-auto">
+                  {/* Standard parties */}
+                  {DEDUCTION_PARTIES.map(party => (
+                    <div key={party} className="flex items-center justify-between py-1.5 px-2 border-b border-gray-100">
+                      <span className="text-sm text-gray-700 w-32 flex-shrink-0">{party}</span>
+                      <Input
+                        type="number"
+                        value={deductionValues[party] || ''}
+                        onChange={(e) => setDeductionValues(prev => ({ ...prev, [party]: e.target.value }))}
+                        placeholder="0.000"
+                        step="0.001"
+                        className="h-8 w-28 text-right font-mono text-sm"
+                      />
+                      <span className="text-xs text-gray-400 ml-2 w-8">kg</span>
+                    </div>
+                  ))}
+                  
+                  {/* Custom parties */}
+                  {customParties.length > 0 && (
+                    <div className="pt-2 mt-2 border-t border-gray-300">
+                      <p className="text-xs text-gray-500 px-2 mb-1">Custom Entries</p>
+                      {customParties.map(party => (
+                        <div key={party} className="flex items-center justify-between py-1.5 px-2 border-b border-gray-100 bg-red-50/30 group">
+                          <span className="text-sm text-gray-700 w-32 flex-shrink-0">{party}</span>
+                          <Input
+                            type="number"
+                            value={deductionValues[party] || ''}
+                            onChange={(e) => setDeductionValues(prev => ({ ...prev, [party]: e.target.value }))}
+                            placeholder="0.000"
+                            step="0.001"
+                            className="h-8 w-28 text-right font-mono text-sm"
+                          />
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-gray-400 w-8">kg</span>
+                            <button
+                              onClick={() => handleRemoveCustomParty(party)}
+                              className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity ml-1"
+                              title="Remove custom entry"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                <div className="flex items-center justify-between py-2 bg-red-50 font-bold text-sm rounded mt-3">
+                  <span className="px-2 text-red-600 uppercase text-xs tracking-wider">Total Deductions</span>
+                  <span className="font-mono px-2 text-red-600">
+                    -{formatWeight(dashboardData?.totalDeductions || 0)}
+                  </span>
+                </div>
               </div>
             </Card>
 
@@ -873,77 +918,6 @@ const SupplierDashboardPage = () => {
                 disabled={!formulaData.name || !formulaData.value}
               >
                 Add Formula
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Deduction Modal */}
-      <Dialog open={deductionModalOpen} onOpenChange={setDeductionModalOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-semibold">Add Deduction</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 mt-4">
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Select Party</Label>
-              <Select
-                value={deductionData.partyName || ''}
-                onValueChange={(val) => {
-                  setDeductionData({ ...deductionData, partyName: val });
-                  setDeductionCustomParty('');
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a party" />
-                </SelectTrigger>
-                <SelectContent>
-                  {DEDUCTION_PARTIES.map(party => (
-                    <SelectItem key={party} value={party}>
-                      {party}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <div className="text-center text-xs text-gray-400 py-1">— or type a new name —</div>
-              <Input
-                type="text"
-                value={deductionCustomParty}
-                onChange={(e) => {
-                  setDeductionCustomParty(e.target.value);
-                  if (e.target.value) setDeductionData({ ...deductionData, partyName: '' });
-                }}
-                placeholder="Enter custom party name"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">Deduction Amount (kg)</Label>
-              <Input
-                type="number"
-                value={deductionData.amount}
-                onChange={(e) => setDeductionData({ ...deductionData, amount: e.target.value })}
-                placeholder="Enter deduction weight"
-                step="0.001"
-              />
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button
-                variant="outline"
-                onClick={() => { setDeductionModalOpen(false); setDeductionCustomParty(''); }}
-                className="flex-1"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={handleAddDeduction}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                disabled={!(deductionCustomParty.trim() || deductionData.partyName) || !deductionData.amount}
-              >
-                Add Deduction
               </Button>
             </div>
           </div>
