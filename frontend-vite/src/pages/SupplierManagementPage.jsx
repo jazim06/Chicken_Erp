@@ -219,6 +219,7 @@ const SupplierManagementPage = () => {
         onClose={() => setModalOpen(false)}
         party={selectedParty}
         onSave={handleSaveEntry}
+        isRetail={id === 'supp_other_calc'}
       />
     </div>
   );

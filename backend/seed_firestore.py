@@ -71,12 +71,17 @@ def seed():
         print(f"  Supplier: {s['name']} → {doc_id}")
 
     # ---------------------------------------------------------------
-    # Sub-parties
+    # Sub-parties (clean old ones first)
     # ---------------------------------------------------------------
+    old_sub_parties = db.collection("sub_parties").stream()
+    for doc in old_sub_parties:
+        doc.reference.delete()
+    print("  Cleaned old sub-parties.")
+
     sub_parties = {
-        "JOSEPH": ["RMS", "Thamim", "Anna City"],
-        "SADIQ": ["Party A", "Party B"],
-        "OTHER CALCULATION": ["Iruppu", "Misc Items"],
+        "JOSEPH": ["RMS", "Thamim", "Irfan", "Rajendran", "BBC", "Parveen"],
+        "SADIQ": ["RMS", "Masthan"],
+        "OTHER CALCULATION": ["Anas", "Anna City", "B.Less", "Sk", "RMS", "Saleem Bhai", "Ramesh", "School", "110", "Daas", "Mahendran"],
         "RAHEEM": ["Farm A", "Farm B"],
     }
     for supplier_name, parties in sub_parties.items():

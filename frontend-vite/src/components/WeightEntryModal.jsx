@@ -11,39 +11,56 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { formatWeight } from '../utils/apiAdapter';
 
-export const WeightEntryModal = ({ isOpen, onClose, party, onSave }) => {
+export const WeightEntryModal = ({ isOpen, onClose, party, onSave, isRetail = false }) => {
   const [loadWeight, setLoadWeight] = useState('');
   const [emptyWeight, setEmptyWeight] = useState('');
+  const [directWeight, setDirectWeight] = useState('');
   const [liveWeight, setLiveWeight] = useState(0);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const load = parseFloat(loadWeight) || 0;
-    const empty = parseFloat(emptyWeight) || 0;
-    const live = load - empty;
+    if (isRetail) {
+      // Retail mode: direct live weight entry
+      const w = parseFloat(directWeight) || 0;
+      setLiveWeight(w);
+      setError(w < 0 ? 'Weight must be positive' : '');
+    } else {
+      // Wholesale mode: load - empty = live
+      const load = parseFloat(loadWeight) || 0;
+      const empty = parseFloat(emptyWeight) || 0;
+      const live = load - empty;
 
-    if (load > 0 && empty > 0) {
-      if (load <= empty) {
-        setError('Load weight must be greater than empty weight');
-        setLiveWeight(0);
+      if (load > 0 && empty > 0) {
+        if (load <= empty) {
+          setError('Load weight must be greater than empty weight');
+          setLiveWeight(0);
+        } else {
+          setError('');
+          setLiveWeight(live);
+        }
       } else {
         setError('');
-        setLiveWeight(live);
+        setLiveWeight(0);
       }
-    } else {
-      setError('');
-      setLiveWeight(0);
     }
-  }, [loadWeight, emptyWeight]);
+  }, [loadWeight, emptyWeight, directWeight, isRetail]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (liveWeight > 0 && !error) {
-      onSave({
-        loadWeight: parseFloat(loadWeight),
-        emptyWeight: parseFloat(emptyWeight),
-        liveWeight
-      });
+      if (isRetail) {
+        onSave({
+          loadWeight: liveWeight,
+          emptyWeight: 0,
+          liveWeight
+        });
+      } else {
+        onSave({
+          loadWeight: parseFloat(loadWeight),
+          emptyWeight: parseFloat(emptyWeight),
+          liveWeight
+        });
+      }
       handleClose();
     }
   };
@@ -51,6 +68,7 @@ export const WeightEntryModal = ({ isOpen, onClose, party, onSave }) => {
   const handleClose = () => {
     setLoadWeight('');
     setEmptyWeight('');
+    setDirectWeight('');
     setLiveWeight(0);
     setError('');
     onClose();
@@ -66,39 +84,59 @@ export const WeightEntryModal = ({ isOpen, onClose, party, onSave }) => {
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 mt-4">
-          {/* Load Weight */}
-          <div className="space-y-2">
-            <Label htmlFor="loadWeight" className="text-xs font-semibold uppercase tracking-wider">
-              Load Weight (KG)
-            </Label>
-            <Input
-              id="loadWeight"
-              type="number"
-              step="0.001"
-              placeholder="Enter load weight"
-              value={loadWeight}
-              onChange={(e) => setLoadWeight(e.target.value)}
-              className="h-12 text-lg weight-display focus-ring"
-              required
-            />
-          </div>
+          {isRetail ? (
+            /* Retail mode: Single weight input */
+            <div className="space-y-2">
+              <Label htmlFor="directWeight" className="text-xs font-semibold uppercase tracking-wider">
+                Actual Weight (KG)
+              </Label>
+              <Input
+                id="directWeight"
+                type="number"
+                step="0.001"
+                placeholder="Enter weight"
+                value={directWeight}
+                onChange={(e) => setDirectWeight(e.target.value)}
+                className="h-12 text-lg weight-display focus-ring"
+                required
+              />
+            </div>
+          ) : (
+            /* Wholesale mode: Load + Empty weight */
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="loadWeight" className="text-xs font-semibold uppercase tracking-wider">
+                  Load Weight (KG)
+                </Label>
+                <Input
+                  id="loadWeight"
+                  type="number"
+                  step="0.001"
+                  placeholder="Enter load weight"
+                  value={loadWeight}
+                  onChange={(e) => setLoadWeight(e.target.value)}
+                  className="h-12 text-lg weight-display focus-ring"
+                  required
+                />
+              </div>
 
-          {/* Empty Weight */}
-          <div className="space-y-2">
-            <Label htmlFor="emptyWeight" className="text-xs font-semibold uppercase tracking-wider">
-              Empty Weight (KG)
-            </Label>
-            <Input
-              id="emptyWeight"
-              type="number"
-              step="0.001"
-              placeholder="Enter empty weight"
-              value={emptyWeight}
-              onChange={(e) => setEmptyWeight(e.target.value)}
-              className="h-12 text-lg weight-display focus-ring"
-              required
-            />
-          </div>
+              <div className="space-y-2">
+                <Label htmlFor="emptyWeight" className="text-xs font-semibold uppercase tracking-wider">
+                  Empty Weight (KG)
+                </Label>
+                <Input
+                  id="emptyWeight"
+                  type="number"
+                  step="0.001"
+                  placeholder="Enter empty weight"
+                  value={emptyWeight}
+                  onChange={(e) => setEmptyWeight(e.target.value)}
+                  className="h-12 text-lg weight-display focus-ring"
+                  required
+                />
+              </div>
+            </>
+          )}
 
           {/* Error Message */}
           {error && (
@@ -108,7 +146,7 @@ export const WeightEntryModal = ({ isOpen, onClose, party, onSave }) => {
           {/* Live Weight Display */}
           <div className="p-6 rounded-lg bg-success/10 border-2 border-success/30">
             <p className="text-xs font-semibold uppercase tracking-wider text-success mb-2">
-              Live Weight
+              {isRetail ? 'Weight' : 'Live Weight'}
             </p>
             <p className="text-4xl font-heading font-bold text-success weight-display">
               {formatWeight(liveWeight)} kg

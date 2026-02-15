@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Save, Download, X } from 'lucide-react';
+import { ArrowLeft, Plus, Save, Download, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon } from 'lucide-react';
+import { format, addDays, subDays } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Calendar } from '../components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +25,9 @@ import {
   getDashboardData,
   updateDashboardEntry,
   createDashboardEntry,
+  createDeductionEntry,
+  updateDeductionEntry,
+  deleteDeductionEntry,
   formatCurrency,
   formatWeight
 } from '../utils/apiAdapter';
@@ -33,8 +39,10 @@ const SupplierDashboardPage = () => {
   const navigate = useNavigate();
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addFormulaModalOpen, setAddFormulaModalOpen] = useState(false);
+  const [deductionModalOpen, setDeductionModalOpen] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
   const [editValue, setEditValue] = useState('');
 
@@ -45,13 +53,25 @@ const SupplierDashboardPage = () => {
   // Add formula form state
   const [formulaData, setFormulaData] = useState({ name: '', formula: '', value: '' });
 
+  // Deduction form state
+  const [deductionData, setDeductionData] = useState({ partyName: '', amount: '' });
+
+  // Hardcoded deduction party list
+  const DEDUCTION_PARTIES = [
+    'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
+    'Masthan', 'AL Ayaan', 'MBB', 'F', 'Anas'
+  ];
+
+  const dateStr = format(selectedDate, 'yyyy-MM-dd');
+
   useEffect(() => {
     loadDashboard();
-  }, [id]);
+  }, [id, dateStr]);
 
   const loadDashboard = async () => {
+    setLoading(true);
     try {
-      const data = await getDashboardData(id);
+      const data = await getDashboardData(id, dateStr);
       setDashboardData(data);
     } catch (error) {
       console.error('Failed to load dashboard:', error);
@@ -70,13 +90,13 @@ const SupplierDashboardPage = () => {
     if (!editingCell) return;
     
     try {
-      const updated = await updateDashboardEntry(
+      await updateDashboardEntry(
         editingCell.type,
         editingCell.itemId,
         editingCell.field,
         editValue
       );
-      setDashboardData(updated);
+      await loadDashboard();
       setEditingCell(null);
       toast.success('Updated successfully');
     } catch (error) {
@@ -99,12 +119,40 @@ const SupplierDashboardPage = () => {
         ...addEntryData
       };
       const updated = await createDashboardEntry(addEntryType, payload);
-      setDashboardData(updated);
+      await loadDashboard();
       setAddModalOpen(false);
       setAddEntryData({ name: '', value: '' });
       toast.success('Entry added successfully');
     } catch (error) {
       toast.error('Failed to add entry');
+    }
+  };
+
+  const handleAddDeduction = async () => {
+    try {
+      await createDeductionEntry({
+        partyName: deductionData.partyName,
+        supplierId: '',
+        supplierName: '',
+        amount: parseFloat(deductionData.amount) || 0,
+        date: dateStr,
+      });
+      await loadDashboard();
+      setDeductionModalOpen(false);
+      setDeductionData({ partyName: '', amount: '' });
+      toast.success('Deduction added successfully');
+    } catch (error) {
+      toast.error('Failed to add deduction');
+    }
+  };
+
+  const handleDeleteDeduction = async (deductionId) => {
+    try {
+      await deleteDeductionEntry(deductionId);
+      await loadDashboard();
+      toast.success('Deduction removed');
+    } catch (error) {
+      toast.error('Failed to remove deduction');
     }
   };
 
@@ -116,7 +164,7 @@ const SupplierDashboardPage = () => {
         formula: formulaData.formula
       };
       const updated = await createDashboardEntry('financial', payload);
-      setDashboardData(updated);
+      await loadDashboard();
       setAddFormulaModalOpen(false);
       setFormulaData({ name: '', formula: '', value: '' });
       toast.success('Formula added successfully');
@@ -207,11 +255,52 @@ const SupplierDashboardPage = () => {
             <h1 className="text-xl font-semibold text-gray-900">Supplier Dashboard</h1>
           </div>
 
-          <div className="text-sm text-gray-600">
-            Current PR Rate: <span className="font-semibold">177</span>
+          {/* Date Navigation */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedDate(prev => subDays(prev, 1))}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className={cn(
+                    "justify-start text-left font-normal h-9 px-3 text-sm",
+                    !selectedDate && "text-muted-foreground"
+                  )}
+                >
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {format(selectedDate, 'PPP')}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="center">
+                <Calendar
+                  mode="single"
+                  selected={selectedDate}
+                  onSelect={(d) => d && setSelectedDate(d)}
+                  initialFocus
+                />
+              </PopoverContent>
+            </Popover>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedDate(prev => addDays(prev, 1))}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
           </div>
 
           <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-600">
+              PR Rate: <span className="font-semibold">{dashboardData?.effectivePrRate || 177}</span>
+            </div>
             <Button
               onClick={() => setAddModalOpen(true)}
               className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4 text-sm"
@@ -307,8 +396,19 @@ const SupplierDashboardPage = () => {
 
             {/* Other Calculations Card */}
             <Card className="p-4 shadow-sm">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                OTHER CALCULATIONS
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  OTHER CALCULATIONS
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setAddEntryType('other'); setAddModalOpen(true); }}
+                  className="h-7 px-2 text-xs text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+                >
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add Entry
+                </Button>
               </div>
               <div className="bg-yellow-50 px-3 py-1 rounded text-xs font-semibold text-yellow-700 mb-2 inline-block">
                 {dashboardData?.otherCalculations?.title}
@@ -341,47 +441,67 @@ const SupplierDashboardPage = () => {
             <Card className="p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Totals Overview</h2>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => { setAddEntryType('totals'); setAddModalOpen(true); }}
-                  className="h-7 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                >
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add Entry
-                </Button>
               </div>
               <div className="space-y-1">
-                {dashboardData?.totalsOverview?.map((item) => {
-                  const isNegative = item.total < 0;
-                  return (
-                    <div
-                      key={item.id}
-                      className={cn(
-                        "flex items-center justify-between py-2 border-b border-gray-100 text-sm",
-                        item.highlight && !isNegative && "bg-blue-50/50",
-                        isNegative && "text-red-600"
-                      )}
-                    >
-                      <span className={cn("px-2", isNegative ? "text-red-600" : "text-gray-900")}>
-                        {item.party}
-                      </span>
-                      <div className="flex items-center gap-2 px-2">
-                        {isNegative && <span className="text-red-600">-</span>}
-                        <EditableCell
-                          value={Math.abs(item.total)}
-                          type="totals"
-                          itemId={item.id}
-                          field="total"
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
+                {dashboardData?.totalsOverview?.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between py-2 border-b border-gray-100 text-sm"
+                  >
+                    <span className="px-2 text-gray-900">{item.party}</span>
+                    <span className="font-mono px-2 text-gray-900">{formatWeight(item.total)}</span>
+                  </div>
+                ))}
                 <div className="flex items-center justify-between py-3 bg-blue-50 font-bold text-sm rounded mt-2">
                   <span className="px-2 text-blue-600 uppercase text-xs tracking-wider">Subtotal</span>
-                  <span className="font-mono px-2 text-blue-600">{formatWeight(calculateSubtotal())}</span>
+                  <span className="font-mono px-2 text-blue-600">{formatWeight(dashboardData?.subtotal || 0)}</span>
                 </div>
+              </div>
+
+              {/* Deductions Section */}
+              <div className="mt-4 pt-3 border-t border-gray-200">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-semibold text-red-600 uppercase tracking-wider">Deductions</h3>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDeductionModalOpen(true)}
+                    className="h-7 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Add
+                  </Button>
+                </div>
+                {(dashboardData?.deductions || []).length === 0 ? (
+                  <p className="text-xs text-gray-400 italic px-2 py-1">No deductions added</p>
+                ) : (
+                  <div className="space-y-0.5">
+                    {(dashboardData?.deductions || []).map((ded) => (
+                      <div
+                        key={ded.id}
+                        className="flex items-center justify-between py-1.5 border-b border-gray-100 text-sm group"
+                      >
+                        <div className="flex items-center gap-2 px-2">
+                          <span className="text-red-600">{ded.partyName}</span>
+                          <span className="text-xs text-gray-400">({ded.supplierName})</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-red-600 px-2">-{formatWeight(ded.amount)}</span>
+                          <button
+                            onClick={() => handleDeleteDeduction(ded.id)}
+                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between py-2 bg-red-50 font-bold text-sm rounded mt-1">
+                      <span className="px-2 text-red-600 uppercase text-xs tracking-wider">Total Deductions</span>
+                      <span className="font-mono px-2 text-red-600">-{formatWeight(dashboardData?.totalDeductions || 0)}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </Card>
 
@@ -392,7 +512,7 @@ const SupplierDashboardPage = () => {
                   Total Balance
                 </p>
                 <p className="text-4xl font-bold text-gray-900 font-mono">
-                  {formatWeight(calculateTotalBalance())}
+                  {formatWeight(dashboardData?.totalBalance || 0)}
                 </p>
               </div>
             </Card>
@@ -424,17 +544,23 @@ const SupplierDashboardPage = () => {
                         {supplierName}
                       </div>
                       {items.map(item => (
-                        <div
-                          key={item.id}
-                          className="flex items-center justify-between py-2 border-b border-gray-100 text-sm hover:bg-gray-50"
-                        >
-                          <span className="text-gray-900 px-2 flex-1">{item.name}</span>
-                          <span className="text-gray-600 px-2 font-mono text-xs w-20 text-right">
-                            {formatWeight(item.weight)}
-                          </span>
-                          <span className="text-gray-900 px-2 font-mono text-right w-24">
-                            {formatCurrency(item.amount)}
-                          </span>
+                        <div key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
+                          <div className="flex items-center justify-between py-2 text-sm">
+                            <span className="text-gray-900 px-2 flex-1">{item.name}</span>
+                            <span className="text-gray-600 px-2 font-mono text-xs w-20 text-right">
+                              {formatWeight(item.weight)}
+                            </span>
+                            <span className="text-gray-900 px-2 font-mono text-right w-24">
+                              {formatCurrency(item.amount)}
+                            </span>
+                          </div>
+                          {item.formula && (
+                            <div className="px-2 pb-1.5 -mt-1">
+                              <span className="text-[10px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded font-mono">
+                                ƒ {item.formula}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -573,6 +699,68 @@ const SupplierDashboardPage = () => {
                 disabled={!formulaData.name || !formulaData.value}
               >
                 Add Formula
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Deduction Modal */}
+      <Dialog open={deductionModalOpen} onOpenChange={setDeductionModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Add Deduction</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Select Party</Label>
+              <Select
+                value={deductionData.partyName || ''}
+                onValueChange={(val) => {
+                  setDeductionData({
+                    ...deductionData,
+                    partyName: val,
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a party" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DEDUCTION_PARTIES.map(party => (
+                    <SelectItem key={party} value={party}>
+                      {party}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Deduction Amount (kg)</Label>
+              <Input
+                type="number"
+                value={deductionData.amount}
+                onChange={(e) => setDeductionData({ ...deductionData, amount: e.target.value })}
+                placeholder="Enter deduction weight"
+                step="0.001"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setDeductionModalOpen(false)}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAddDeduction}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                disabled={!deductionData.partyName || !deductionData.amount}
+              >
+                Add Deduction
               </Button>
             </div>
           </div>

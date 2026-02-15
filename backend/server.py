@@ -20,6 +20,8 @@ from starlette.middleware.cors import CORSMiddleware
 from auth import get_current_user, get_optional_user
 from firebase_client import initialize_firebase
 from models import (
+    DeductionEntryCreate,
+    DeductionEntryUpdate,
     FinancialEntryCreate,
     FinancialEntryUpdate,
     LoginRequest,
@@ -35,17 +37,20 @@ from models import (
 )
 from services import (
     add_sub_party,
+    create_deduction_entry,
     create_financial_entry,
     create_price_rate,
     create_section_f_entry,
     create_supplier,
     create_weight_entry,
+    delete_deduction_entry,
     delete_financial_entry,
     delete_section_f_entry,
     delete_sub_party,
     get_all_products,
     get_all_suppliers,
     get_dashboard,
+    get_deduction_entries,
     get_effective_rate,
     get_financial_entries,
     get_section_f_entries,
@@ -54,6 +59,7 @@ from services import (
     reorder_financial_entries,
     save_daily_carryover,
     soft_delete_weight_entry,
+    update_deduction_entry,
     update_financial_entry,
     update_section_f_entry,
     update_weight_entry,
@@ -385,3 +391,41 @@ async def read_price_rate(
 async def new_price_rate(body: PriceRateCreate, user: dict = Depends(get_current_user)):
     doc_id = create_price_rate(body.model_dump())
     return {"id": doc_id, **body.model_dump()}
+
+
+# ===================================================================
+# DEDUCTION ENTRIES
+# ===================================================================
+
+@app.get("/api/deduction-entries")
+async def list_deduction_entries_route(date: str = Query(...)):
+    return get_deduction_entries(date)
+
+
+@app.post("/api/deduction-entries", status_code=201)
+async def new_deduction_entry(
+    body: DeductionEntryCreate,
+    user: dict = Depends(get_current_user),
+):
+    return create_deduction_entry(body.model_dump())
+
+
+@app.patch("/api/deduction-entries/{entry_id}")
+async def patch_deduction_entry(
+    entry_id: str,
+    body: DeductionEntryUpdate,
+    user: dict = Depends(get_current_user),
+):
+    try:
+        return update_deduction_entry(entry_id, body.model_dump(exclude_none=True))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/deduction-entries/{entry_id}")
+async def remove_deduction_entry(entry_id: str, user: dict = Depends(get_current_user)):
+    try:
+        delete_deduction_entry(entry_id)
+        return {"success": True}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

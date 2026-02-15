@@ -181,6 +181,37 @@ class SectionFEntryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Deduction Entries
+# ---------------------------------------------------------------------------
+
+class DeductionEntryCreate(BaseModel):
+    partyName: str = Field(..., min_length=1, max_length=255)
+    supplierId: str
+    supplierName: str
+    amount: float
+    date: str  # YYYY-MM-DD
+
+    @field_validator("amount")
+    @classmethod
+    def amount_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("amount must be >= 0")
+        return round(v, 3)
+
+
+class DeductionEntryUpdate(BaseModel):
+    amount: Optional[float] = None
+    partyName: Optional[str] = None
+
+    @field_validator("amount")
+    @classmethod
+    def amount_valid(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("amount must be >= 0")
+        return round(v, 3) if v is not None else v
+
+
+# ---------------------------------------------------------------------------
 # Price Rates
 # ---------------------------------------------------------------------------
 

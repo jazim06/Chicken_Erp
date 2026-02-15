@@ -203,8 +203,8 @@ export const createPriceRate = (data) =>
  * Maps the generic inline-edit calls from the dashboard UI to the
  * correct backend endpoints.
  */
-export const updateDashboardEntry = async (type, id, field, value) => {
-  const today = new Date().toISOString().slice(0, 10);
+export const updateDashboardEntry = async (type, id, field, value, date = null) => {
+  const today = date || new Date().toISOString().slice(0, 10);
 
   if (type === 'totals' || type === 'financial') {
     // Update financial entry
@@ -234,8 +234,8 @@ export const updateDashboardEntry = async (type, id, field, value) => {
 /**
  * createDashboardEntry(type, data)
  */
-export const createDashboardEntry = async (type, data) => {
-  const today = new Date().toISOString().slice(0, 10);
+export const createDashboardEntry = async (type, data, date = null) => {
+  const today = date || new Date().toISOString().slice(0, 10);
 
   if (type === 'totals' || type === 'financial') {
     await createFinancialEntry({
@@ -272,6 +272,22 @@ export const deleteDashboardEntry = async (type, id) => {
 
   return getDashboardData(null, today);
 };
+
+// ===================================================================
+// DEDUCTION ENTRIES
+// ===================================================================
+
+export const getDeductionEntries = (date) =>
+  api(`/api/deduction-entries?date=${date}`);
+
+export const createDeductionEntry = (data) =>
+  api('/api/deduction-entries', 'POST', data);
+
+export const updateDeductionEntry = (id, data) =>
+  api(`/api/deduction-entries/${id}`, 'PATCH', data);
+
+export const deleteDeductionEntry = (id) =>
+  api(`/api/deduction-entries/${id}`, 'DELETE');
 
 // ===================================================================
 // REAL-TIME LISTENERS (Firestore)

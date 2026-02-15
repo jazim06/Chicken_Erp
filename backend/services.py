@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 WEIGHT_ENTRIES = "weight_entries"
 FINANCIAL_ENTRIES = "financial_entries"
 SECTION_F_ENTRIES = "section_f_entries"
+DEDUCTION_ENTRIES = "deduction_entries"
 PRICE_RATES = "price_rates"
 SUPPLIERS = "suppliers"
 SUB_PARTIES = "sub_parties"
@@ -298,18 +299,26 @@ def calculate_totals_overview(
 ) -> dict:
     """
     Build the totals-overview section:
-      1. Sum all supplier totals (live weight only) + M.Iruppu carryover → totalAvailable
-    Returns {totalAvailable, carryover, totalBalance}
+      1. Sum all supplier totals (live weight only) + M.Iruppu carryover → subtotal
+      2. Fetch deduction entries for the date
+      3. totalBalance = subtotal - totalDeductions
     """
     # Sum of all supplier live weights
     available = sum(s["totalWeight"] for s in supplier_totals)
     carryover = _get_previous_day_carryover(date)
-    total_available = round(available + carryover, 3)
+    subtotal = round(available + carryover, 3)
+
+    # Deductions
+    deductions = get_deduction_entries(date)
+    total_deductions = round(sum(d.get("amount", 0) for d in deductions), 3)
+    total_balance = round(subtotal - total_deductions, 3)
 
     return {
-        "totalAvailable": total_available,
+        "subtotal": subtotal,
         "carryover": carryover,
-        "totalBalance": total_available,
+        "totalDeductions": total_deductions,
+        "deductions": deductions,
+        "totalBalance": total_balance,
     }
 
 
@@ -482,6 +491,58 @@ def get_section_f_entries(date: str) -> list[dict]:
 
 
 # ===================================================================
+# DEDUCTION ENTRIES CRUD
+# ===================================================================
+
+def create_deduction_entry(data: dict) -> dict:
+    """Create a deduction entry for a sub-party on a given date."""
+    doc = {
+        "partyName": data["partyName"],
+        "supplierId": data["supplierId"],
+        "supplierName": data["supplierName"],
+        "amount": data["amount"],
+        "date": data["date"],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    doc_id = create_document(DEDUCTION_ENTRIES, doc)
+    doc["id"] = doc_id
+    return doc
+
+
+def get_deduction_entries(date: str) -> list[dict]:
+    """List all deduction entries for a date."""
+    return list_documents(
+        DEDUCTION_ENTRIES,
+        filters=[("date", "==", date)],
+    )
+
+
+def update_deduction_entry(entry_id: str, data: dict) -> dict:
+    """Update a deduction entry."""
+    existing = get_document(DEDUCTION_ENTRIES, entry_id)
+    if not existing:
+        raise LookupError(f"Deduction entry {entry_id} not found")
+
+    updates = {}
+    for field in ("amount", "partyName"):
+        if field in data and data[field] is not None:
+            updates[field] = data[field]
+
+    if updates:
+        update_document(DEDUCTION_ENTRIES, entry_id, updates)
+    existing.update(updates)
+    return existing
+
+
+def delete_deduction_entry(entry_id: str) -> None:
+    """Delete a deduction entry."""
+    existing = get_document(DEDUCTION_ENTRIES, entry_id)
+    if not existing:
+        raise LookupError(f"Deduction entry {entry_id} not found")
+    delete_document(DEDUCTION_ENTRIES, entry_id)
+
+
+# ===================================================================
 # SUPPLIER / PRODUCT CRUD
 # ===================================================================
 
@@ -517,13 +578,23 @@ def get_all_suppliers(product_type: str | None = None) -> list[dict]:
 
 
 def get_supplier(supplier_id: str) -> dict | None:
-    """Return a single supplier with sub-parties."""
+    """Return a single supplier with sub-parties and today's weight computed from entries."""
     supplier = get_document(SUPPLIERS, supplier_id)
     if supplier:
         subs = list_documents(
             SUB_PARTIES,
             filters=[("supplierId", "==", supplier_id)],
         )
+        # Compute todayWeight from actual weight entries
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_entries = get_weight_entries(today, supplier_id=supplier_id)
+        # Build a mapping partyId → total live weight
+        party_weights = {}
+        for entry in today_entries:
+            pid = entry.get("partyId", "")
+            party_weights[pid] = party_weights.get(pid, 0) + entry.get("liveWeight", 0)
+        for sub in subs:
+            sub["todayWeight"] = round(party_weights.get(sub["id"], 0), 3)
         supplier["subParties"] = subs
     return supplier
 
@@ -605,33 +676,68 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     totals = calculate_totals_overview(date, supplier_totals)
 
     # 4. Financial breakdown (right column) — each sub-party × rate
+    #    Custom formulas for specific parties:
+    #      Parveen:     (Paper rate - 3) × weight
+    #      Anna City:   (Weight × 1.5) × (Paper rate + 4)
+    #      Saleem Bhai: (Weight × 1.6) × (Paper rate + 5)
+    CUSTOM_FORMULAS = {
+        "Parveen": {
+            "calc": lambda w, r: round((r - 3) * w, 2),
+            "label": "(Paper rate - 3) × Weight",
+        },
+        "Anna City": {
+            "calc": lambda w, r: round((w * 1.5) * (r + 4), 2),
+            "label": "(Weight × 1.5) × (Paper rate + 4)",
+        },
+        "Saleem Bhai": {
+            "calc": lambda w, r: round((w * 1.6) * (r + 5), 2),
+            "label": "(Weight × 1.6) × (Paper rate + 5)",
+        },
+    }
+
     financial = []
     financial_total = 0.0
     for supplier in supplier_totals:
         for row in supplier["rows"]:
             live_weight = row["c"]  # Column C = live weight
-            amount = round(live_weight * rate, 2)
+            party_name = row["party"]
+            formula_info = CUSTOM_FORMULAS.get(party_name)
+            if formula_info:
+                amount = formula_info["calc"](live_weight, rate)
+                formula_label = formula_info["label"]
+            else:
+                amount = round(live_weight * rate, 2)
+                formula_label = None
             financial.append({
                 "id": row["id"],
-                "name": row["party"],
+                "name": party_name,
                 "weight": live_weight,
                 "ratePerKg": rate,
                 "amount": amount,
                 "supplierName": supplier["name"],
+                "formula": formula_label,
             })
             financial_total += amount
     # Also add Other Calculation sub-parties (retail weight × rate)
     for supplier in other_calc_supplier:
         for row in supplier["rows"]:
             weight = row["c"]  # For Section F, C = actual weight entered
-            amount = round(weight * rate, 2)
+            party_name = row["party"]
+            formula_info = CUSTOM_FORMULAS.get(party_name)
+            if formula_info:
+                amount = formula_info["calc"](weight, rate)
+                formula_label = formula_info["label"]
+            else:
+                amount = round(weight * rate, 2)
+                formula_label = None
             financial.append({
                 "id": row["id"],
-                "name": row["party"],
+                "name": party_name,
                 "weight": weight,
                 "ratePerKg": rate,
                 "amount": amount,
                 "supplierName": supplier["name"],
+                "formula": formula_label,
             })
             financial_total += amount
     financial_total = round(financial_total, 2)
@@ -663,7 +769,18 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
             "total": totals["carryover"],
         })
 
-    # 8. Other calculations display — combine Section F entries + Other
+    # 8. Deductions display (from totals dict)
+    deductions_display = [
+        {
+            "id": d["id"],
+            "partyName": d["partyName"],
+            "supplierName": d.get("supplierName", ""),
+            "amount": d["amount"],
+        }
+        for d in totals.get("deductions", [])
+    ]
+
+    # 9. Other calculations display — combine Section F entries + Other
     #    Calculation supplier entries (retail weight only)
     other_items = [
         {"id": e["id"], "name": e["name"], "value": e["amount"]}
@@ -687,11 +804,13 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         "suppliers": supplier_totals,
         "otherCalculations": other_calc,
         "totalsOverview": totals_display,
+        "subtotal": totals["subtotal"],
+        "deductions": deductions_display,
+        "totalDeductions": totals["totalDeductions"],
         "financial": financial,
         "financialTotal": financial_total,
         "sectionF": section_f,
         "sectionFTotal": section_f_total,
         "grandTotal": grand_total,
         "totalBalance": totals["totalBalance"],
-        "totalAvailable": totals["totalAvailable"],
     }
