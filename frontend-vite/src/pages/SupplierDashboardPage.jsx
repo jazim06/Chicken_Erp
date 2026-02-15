@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Save, Download, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon } from 'lucide-react';
+import { ArrowLeft, Plus, Download, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Pencil, Check, Users } from 'lucide-react';
 import { format, addDays, subDays } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
@@ -28,6 +28,7 @@ import {
   createDeductionEntry,
   updateDeductionEntry,
   deleteDeductionEntry,
+  updatePriceRate,
   formatCurrency,
   formatWeight
 } from '../utils/apiAdapter';
@@ -55,6 +56,13 @@ const SupplierDashboardPage = () => {
 
   // Deduction form state
   const [deductionData, setDeductionData] = useState({ partyName: '', amount: '' });
+  const [deductionCustomParty, setDeductionCustomParty] = useState('');
+  const [yesterdayStock, setYesterdayStock] = useState('');
+  const [savingStock, setSavingStock] = useState(false);
+
+  // PR Rate editing state
+  const [editingRate, setEditingRate] = useState(false);
+  const [editRateValue, setEditRateValue] = useState('');
 
   // Hardcoded deduction party list
   const DEDUCTION_PARTIES = [
@@ -67,6 +75,32 @@ const SupplierDashboardPage = () => {
   useEffect(() => {
     loadDashboard();
   }, [id, dateStr]);
+
+  // Sync yesterday stock from dashboard data
+  useEffect(() => {
+    if (dashboardData) {
+      const stockItem = dashboardData.totalsOverview?.find(i => i.id === 'yesterday_stock');
+      setYesterdayStock(stockItem?.total || 0);
+    }
+  }, [dashboardData]);
+
+  const handleSaveYesterdayStock = async (value) => {
+    setSavingStock(true);
+    try {
+      const prevDate = format(subDays(selectedDate, 1), 'yyyy-MM-dd');
+      await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer dev-hardcoded-token' },
+        body: JSON.stringify({ date: prevDate, balance: parseFloat(value) || 0 }),
+      });
+      await loadDashboard();
+      toast.success('Yesterday stock updated');
+    } catch {
+      toast.error('Failed to save yesterday stock');
+    } finally {
+      setSavingStock(false);
+    }
+  };
 
   const loadDashboard = async () => {
     setLoading(true);
@@ -129,29 +163,76 @@ const SupplierDashboardPage = () => {
   };
 
   const handleAddDeduction = async () => {
+    const finalPartyName = deductionCustomParty.trim() || deductionData.partyName;
+    const deductionAmount = parseFloat(deductionData.amount) || 0;
+    const tempId = `temp-${Date.now()}`;
+
+    // Optimistic UI update
+    setDashboardData(prev => ({
+      ...prev,
+      deductions: [...(prev?.deductions || []), { id: tempId, partyName: finalPartyName, amount: deductionAmount }],
+      totalDeductions: (prev?.totalDeductions || 0) + deductionAmount,
+      totalBalance: (prev?.totalBalance || 0) - deductionAmount,
+    }));
+    setDeductionModalOpen(false);
+    setDeductionData({ partyName: '', amount: '' });
+    setDeductionCustomParty('');
+
     try {
       await createDeductionEntry({
-        partyName: deductionData.partyName,
+        partyName: finalPartyName,
         supplierId: '',
         supplierName: '',
-        amount: parseFloat(deductionData.amount) || 0,
+        amount: deductionAmount,
         date: dateStr,
       });
-      await loadDashboard();
-      setDeductionModalOpen(false);
-      setDeductionData({ partyName: '', amount: '' });
+      await loadDashboard(); // Sync real IDs
       toast.success('Deduction added successfully');
     } catch (error) {
+      // Rollback optimistic update
+      setDashboardData(prev => ({
+        ...prev,
+        deductions: (prev?.deductions || []).filter(d => d.id !== tempId),
+        totalDeductions: (prev?.totalDeductions || 0) - deductionAmount,
+        totalBalance: (prev?.totalBalance || 0) + deductionAmount,
+      }));
       toast.error('Failed to add deduction');
     }
   };
 
+  const handleSaveRate = async () => {
+    const val = parseFloat(editRateValue);
+    if (!val || val <= 0) { toast.error('Enter a valid rate'); return; }
+    try {
+      await updatePriceRate({ ratePerKg: val, date: dateStr, productTypeId: 'chicken' });
+      await loadDashboard();
+      setEditingRate(false);
+      toast.success('PR Rate updated');
+    } catch (error) {
+      toast.error('Failed to update rate');
+    }
+  };
+
   const handleDeleteDeduction = async (deductionId) => {
+    // Capture for rollback
+    const prev = dashboardData;
+    const removed = prev?.deductions?.find(d => d.id === deductionId);
+    const amt = removed?.amount || 0;
+
+    // Optimistic remove
+    setDashboardData(p => ({
+      ...p,
+      deductions: (p?.deductions || []).filter(d => d.id !== deductionId),
+      totalDeductions: (p?.totalDeductions || 0) - amt,
+      totalBalance: (p?.totalBalance || 0) + amt,
+    }));
+
     try {
       await deleteDeductionEntry(deductionId);
       await loadDashboard();
       toast.success('Deduction removed');
     } catch (error) {
+      setDashboardData(prev); // Rollback
       toast.error('Failed to remove deduction');
     }
   };
@@ -173,28 +254,80 @@ const SupplierDashboardPage = () => {
     }
   };
 
-  const handleSave = () => {
-    toast.success('Dashboard data saved successfully!');
-  };
-
   const handleExport = () => {
-    toast.success('Exporting dashboard data...');
+    try {
+      let csv = `Dashboard Export - ${format(selectedDate, 'PPP')}\n\n`;
+
+      // Suppliers section
+      csv += 'SUPPLIERS\n';
+      csv += 'Name,A (Load),B (Empty),C (Live)\n';
+      dashboardData?.suppliers?.forEach(supp => {
+        supp.subParties.forEach(sp => {
+          csv += `${sp.name},${sp.a || 0},${sp.b || 0},${sp.c || 0}\n`;
+        });
+        csv += `${supp.name} TOTAL,,,${supp.total || 0}\n`;
+      });
+
+      // Totals Overview
+      csv += '\nTOTALS OVERVIEW\n';
+      csv += 'Item,Weight (kg)\n';
+      dashboardData?.totalsOverview?.forEach(item => {
+        csv += `${item.label || item.name},${item.total || item.value || 0}\n`;
+      });
+      csv += `SUBTOTAL,${calculateSubtotal()}\n`;
+
+      // Financial Breakdown
+      csv += '\nFINANCIAL BREAKDOWN\n';
+      csv += 'Party,Weight (kg),Rate,Amount\n';
+      dashboardData?.financialBreakdown?.forEach(item => {
+        csv += `${item.name},${item.weight || 0},${item.rate || 0},${item.amount || 0}\n`;
+      });
+      csv += `GRAND TOTAL,,,${dashboardData?.grandTotal || 0}\n`;
+
+      // Deductions
+      if (dashboardData?.deductions?.length > 0) {
+        csv += '\nDEDUCTIONS\n';
+        csv += 'Party,Weight (kg)\n';
+        dashboardData.deductions.forEach(ded => {
+          csv += `${ded.partyName},${ded.amount}\n`;
+        });
+      }
+
+      // Download
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `dashboard_${format(selectedDate, 'yyyy-MM-dd')}.csv`;
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('Dashboard exported successfully');
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Failed to export dashboard');
+    }
   };
 
-  // Calculate totals
-  const calculateSupplierTotal = (rows) => {
-    return rows.reduce((sum, row) => sum + (row.c || 0), 0);
-  };
+  // Memoized calculations — only recompute when dashboardData changes
+  const calculateSupplierTotal = useCallback(
+    (rows) => rows.reduce((sum, row) => sum + (row.c || 0), 0),
+    []
+  );
 
-  const calculateOtherTotal = () => {
+  const otherTotal = useMemo(() => {
     if (!dashboardData?.otherCalculations?.items) return 0;
     return dashboardData.otherCalculations.items.reduce((sum, item) => sum + (item.value || 0), 0);
-  };
+  }, [dashboardData?.otherCalculations]);
 
-  const calculateSubtotal = () => {
+  const subtotal = useMemo(() => {
     if (!dashboardData?.totalsOverview) return 0;
     return dashboardData.totalsOverview.reduce((sum, item) => sum + (item.total || 0), 0);
-  };
+  }, [dashboardData?.totalsOverview]);
+
+  // Keep old function signatures for JSX compatibility
+  const calculateOtherTotal = () => otherTotal;
+  const calculateSubtotal = () => subtotal;
 
   const calculateGrandTotal = () => {
     return dashboardData?.financialTotal || 0;
@@ -247,7 +380,7 @@ const SupplierDashboardPage = () => {
         <div className="max-w-[1400px] mx-auto px-6 h-full flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
-              onClick={() => navigate(`/supplier/${id}`)}
+              onClick={() => navigate('/suppliers?product=chicken')}
               className="text-gray-600 hover:text-gray-900 transition-colors"
             >
               <ArrowLeft className="h-5 w-5" />
@@ -298,31 +431,52 @@ const SupplierDashboardPage = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="text-sm text-gray-600">
-              PR Rate: <span className="font-semibold">{dashboardData?.effectivePrRate || 177}</span>
-            </div>
+            {/* Editable PR Rate */}
+            {editingRate ? (
+              <div className="flex items-center gap-1">
+                <span className="text-sm text-gray-600">PR Rate:</span>
+                <Input
+                  type="number"
+                  value={editRateValue}
+                  onChange={(e) => setEditRateValue(e.target.value)}
+                  className="h-8 w-20 text-sm"
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveRate(); if (e.key === 'Escape') setEditingRate(false); }}
+                />
+                <button onClick={handleSaveRate} className="text-green-600 hover:text-green-800">
+                  <Check className="h-4 w-4" />
+                </button>
+                <button onClick={() => setEditingRate(false)} className="text-gray-400 hover:text-gray-600">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => { setEditRateValue(dashboardData?.effectivePrRate || 177); setEditingRate(true); }}
+                className="flex items-center gap-1 text-sm text-gray-600 hover:text-blue-600 transition-colors cursor-pointer"
+              >
+                PR Rate: <span className="font-semibold">{dashboardData?.effectivePrRate || 177}</span>
+                <Pencil className="h-3 w-3 ml-0.5" />
+              </button>
+            )}
+
+            {/* Suppliers Navigation */}
             <Button
-              onClick={() => setAddModalOpen(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4 text-sm"
-            >
-              <Plus className="h-4 w-4 mr-1" />
-              Add New
-            </Button>
-            <Button
-              onClick={handleSave}
               variant="outline"
-              className="h-9 px-4 text-sm"
+              onClick={() => navigate('/suppliers?product=chicken')}
+              className="h-9 px-3 text-sm"
             >
-              <Save className="h-4 w-4 mr-1" />
-              Save
+              <Users className="h-4 w-4 mr-1" />
+              Suppliers
             </Button>
+
             <Button
               onClick={handleExport}
               variant="outline"
-              className="h-9 px-4 text-sm"
+              className="h-9 px-4 text-sm bg-green-50 hover:bg-green-100 text-green-700 border-green-200"
             >
               <Download className="h-4 w-4 mr-1" />
-              Export
+              Export CSV
             </Button>
           </div>
         </div>
@@ -446,10 +600,30 @@ const SupplierDashboardPage = () => {
                 {dashboardData?.totalsOverview?.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center justify-between py-2 border-b border-gray-100 text-sm"
+                    className={`flex items-center justify-between py-2 border-b border-gray-100 text-sm ${
+                      item.id === 'yesterday_stock' ? 'bg-amber-50' : ''
+                    }`}
                   >
-                    <span className="px-2 text-gray-900">{item.party}</span>
-                    <span className="font-mono px-2 text-gray-900">{formatWeight(item.total)}</span>
+                    <span className={`px-2 ${
+                      item.id === 'yesterday_stock' ? 'font-semibold text-amber-700' : 'text-gray-900'
+                    }`}>{item.party}</span>
+                    {item.id === 'yesterday_stock' ? (
+                      <div className="flex items-center gap-1 px-2">
+                        <input
+                          type="number"
+                          value={yesterdayStock}
+                          onChange={(e) => setYesterdayStock(e.target.value)}
+                          onBlur={(e) => handleSaveYesterdayStock(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveYesterdayStock(e.target.value)}
+                          className="w-24 px-2 py-1 text-right font-mono text-sm border border-amber-300 rounded bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                          placeholder="0"
+                          step="0.001"
+                          disabled={savingStock}
+                        />
+                      </div>
+                    ) : (
+                      <span className="font-mono px-2 text-gray-900">{formatWeight(item.total)}</span>
+                    )}
                   </div>
                 ))}
                 <div className="flex items-center justify-between py-3 bg-blue-50 font-bold text-sm rounded mt-2">
@@ -717,10 +891,8 @@ const SupplierDashboardPage = () => {
               <Select
                 value={deductionData.partyName || ''}
                 onValueChange={(val) => {
-                  setDeductionData({
-                    ...deductionData,
-                    partyName: val,
-                  });
+                  setDeductionData({ ...deductionData, partyName: val });
+                  setDeductionCustomParty('');
                 }}
               >
                 <SelectTrigger>
@@ -734,6 +906,17 @@ const SupplierDashboardPage = () => {
                   ))}
                 </SelectContent>
               </Select>
+
+              <div className="text-center text-xs text-gray-400 py-1">— or type a new name —</div>
+              <Input
+                type="text"
+                value={deductionCustomParty}
+                onChange={(e) => {
+                  setDeductionCustomParty(e.target.value);
+                  if (e.target.value) setDeductionData({ ...deductionData, partyName: '' });
+                }}
+                placeholder="Enter custom party name"
+              />
             </div>
 
             <div className="space-y-2">
@@ -750,7 +933,7 @@ const SupplierDashboardPage = () => {
             <div className="flex gap-2 pt-2">
               <Button
                 variant="outline"
-                onClick={() => setDeductionModalOpen(false)}
+                onClick={() => { setDeductionModalOpen(false); setDeductionCustomParty(''); }}
                 className="flex-1"
               >
                 Cancel
@@ -758,7 +941,7 @@ const SupplierDashboardPage = () => {
               <Button
                 onClick={handleAddDeduction}
                 className="flex-1 bg-red-600 hover:bg-red-700 text-white"
-                disabled={!deductionData.partyName || !deductionData.amount}
+                disabled={!(deductionCustomParty.trim() || deductionData.partyName) || !deductionData.amount}
               >
                 Add Deduction
               </Button>

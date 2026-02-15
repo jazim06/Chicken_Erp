@@ -10,11 +10,12 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import get_current_user, get_optional_user
@@ -86,12 +87,17 @@ app = FastAPI(title="Chicken ERP API", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
-# CORS
+# CORS — allow all dev origins (localhost on any port)
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
+        "http://localhost:5173",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -288,6 +294,24 @@ async def confirm_dashboard(
     return {"confirmed": True, "carryover": dashboard["totalBalance"]}
 
 
+@app.put("/api/carryover")
+async def set_carryover(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Manually set the daily carryover (Yesterday Stock) for a given date.
+    Body: { "date": "YYYY-MM-DD", "balance": 123.456 }
+    """
+    body = await request.json()
+    date = body.get("date")
+    balance = float(body.get("balance", 0))
+    if not date:
+        raise HTTPException(status_code=400, detail="date is required")
+    save_daily_carryover(date, balance)
+    return {"success": True, "date": date, "balance": balance}
+
+
 # ===================================================================
 # FINANCIAL ENTRIES
 # ===================================================================
@@ -391,6 +415,38 @@ async def read_price_rate(
 async def new_price_rate(body: PriceRateCreate, user: dict = Depends(get_current_user)):
     doc_id = create_price_rate(body.model_dump())
     return {"id": doc_id, **body.model_dump()}
+
+
+@app.put("/api/price-rates")
+async def upsert_price_rate(request: Request, user: dict = Depends(get_current_user)):
+    """Set / update today's rate. Creates a new rate doc or updates existing one."""
+    body = await request.json()
+    rate_val = float(body.get("ratePerKg", 0))
+    date = body.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    product = body.get("productTypeId", "chicken")
+
+    # Try to find existing rate for this exact date
+    from backend.firebase_client import db
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    existing = (
+        db.collection("price_rates")
+        .where(filter=FieldFilter("productTypeId", "==", product))
+        .where(filter=FieldFilter("effectiveFrom", "==", date))
+        .limit(1)
+        .stream()
+    )
+    doc = next(existing, None)
+    if doc:
+        db.collection("price_rates").document(doc.id).update({"ratePerKg": rate_val})
+        return {"id": doc.id, "ratePerKg": rate_val, "updated": True}
+    else:
+        doc_id = create_price_rate({
+            "productTypeId": product,
+            "ratePerKg": rate_val,
+            "effectiveFrom": date,
+            "effectiveTo": None,
+        })
+        return {"id": doc_id, "ratePerKg": rate_val, "updated": False}
 
 
 # ===================================================================

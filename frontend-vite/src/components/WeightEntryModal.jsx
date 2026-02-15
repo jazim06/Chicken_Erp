@@ -11,12 +11,30 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { formatWeight } from '../utils/apiAdapter';
 
-export const WeightEntryModal = ({ isOpen, onClose, party, onSave, isRetail = false }) => {
+export const WeightEntryModal = ({ isOpen, onClose, party, onSave, isRetail = false, editingEntry = null }) => {
   const [loadWeight, setLoadWeight] = useState('');
   const [emptyWeight, setEmptyWeight] = useState('');
   const [directWeight, setDirectWeight] = useState('');
   const [liveWeight, setLiveWeight] = useState(0);
   const [error, setError] = useState('');
+
+  // Pre-fill values when editing an existing entry
+  useEffect(() => {
+    if (isOpen && editingEntry) {
+      if (isRetail) {
+        setDirectWeight(String(editingEntry.liveWeight || ''));
+      } else {
+        setLoadWeight(String(editingEntry.loadWeight || ''));
+        setEmptyWeight(String(editingEntry.emptyWeight || ''));
+      }
+    } else if (!isOpen) {
+      setLoadWeight('');
+      setEmptyWeight('');
+      setDirectWeight('');
+      setLiveWeight(0);
+      setError('');
+    }
+  }, [isOpen, editingEntry, isRetail]);
 
   useEffect(() => {
     if (isRetail) {
@@ -79,7 +97,7 @@ export const WeightEntryModal = ({ isOpen, onClose, party, onSave, isRetail = fa
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-xl font-heading font-bold uppercase tracking-wide">
-            Weight Entry - {party?.name}
+            {editingEntry ? 'Edit' : 'Add'} Weight Entry - {party?.name}
           </DialogTitle>
         </DialogHeader>
 
@@ -168,7 +186,7 @@ export const WeightEntryModal = ({ isOpen, onClose, party, onSave, isRetail = fa
               className="flex-1 h-12 bg-primary hover:bg-primary-hover"
               disabled={!liveWeight || !!error}
             >
-              Save Entry
+              {editingEntry ? 'Update Entry' : 'Save Entry'}
             </Button>
           </div>
         </form>

@@ -8,8 +8,10 @@ running-balance sequencing, financial breakdown, grand total.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
+from cache import cache_get, cache_set, cache_invalidate
 from firebase_client import (
     create_document,
     get_collection,
@@ -97,37 +99,56 @@ _FALLBACK_SUPPLIERS = {
 # PRICE RATE
 # ===================================================================
 
+# ---------------------------------------------------------------------------
+# Cached helpers
+# ---------------------------------------------------------------------------
+
+def _get_supplier_names() -> dict[str, str]:
+    """Get all supplier ID→name mappings. Cached 10 min."""
+    cache_key = "supplier_names"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    suppliers = list_documents(SUPPLIERS)
+    mapping = {s["id"]: s["name"] for s in suppliers}
+    cache_set(cache_key, mapping, ttl_seconds=600)
+    return mapping
+
+
 def get_effective_rate(product_type_id: str, date: str) -> float:
     """
     Return the effective rate (₹/kg) for a product type on a given date.
-    Queries price_rates where effectiveFrom <= date and
-    (effectiveTo is null OR effectiveTo >= date).
-    Falls back to 0 if no rate found.
+    Cached per product+date for 1 hour.
     """
-    # Fetch all rates for the product type and filter in Python to avoid composite index
+    cache_key = f"rate:{product_type_id}:{date}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     rates = list_documents(
         PRICE_RATES,
         filters=[("productTypeId", "==", product_type_id)],
     )
-    
-    # Filter by date range in Python
     valid = [
         r for r in rates
         if r.get("effectiveFrom", "") <= date and 
            (r.get("effectiveTo") is None or r["effectiveTo"] >= date)
     ]
-    
     if valid:
-        # Pick the most recent effectiveFrom
         valid.sort(key=lambda x: x.get("effectiveFrom", ""))
-        return valid[-1]["ratePerKg"]
-    return 0.0
+        rate = valid[-1]["ratePerKg"]
+    else:
+        rate = 0.0
+    cache_set(cache_key, rate, ttl_seconds=3600)
+    return rate
 
 
 def create_price_rate(data: dict) -> str:
-    """Create a new price rate entry."""
+    """Create a new price rate entry and invalidate rate cache."""
     data["createdAt"] = datetime.now(timezone.utc).isoformat()
-    return create_document(PRICE_RATES, data)
+    doc_id = create_document(PRICE_RATES, data)
+    cache_invalidate("rate:")
+    return doc_id
 
 
 # ===================================================================
@@ -170,7 +191,10 @@ def update_weight_entry(entry_id: str, data: dict) -> dict:
 
     load_w = data.get("loadWeight", existing["loadWeight"])
     empty_w = data.get("emptyWeight", existing["emptyWeight"])
-    if load_w <= empty_w:
+
+    # For retail entries emptyWeight=0, allow loadWeight == emptyWeight == 0
+    # but still require loadWeight > emptyWeight for wholesale
+    if empty_w > 0 and load_w <= empty_w:
         raise ValueError("loadWeight must be greater than emptyWeight")
 
     updates = {}
@@ -178,7 +202,10 @@ def update_weight_entry(entry_id: str, data: dict) -> dict:
         updates["loadWeight"] = data["loadWeight"]
     if "emptyWeight" in data:
         updates["emptyWeight"] = data["emptyWeight"]
-    updates["liveWeight"] = round(load_w - empty_w, 3)
+    if "liveWeight" in data:
+        updates["liveWeight"] = data["liveWeight"]
+    else:
+        updates["liveWeight"] = round(load_w - empty_w, 3)
 
     update_document(WEIGHT_ENTRIES, entry_id, updates)
     existing.update(updates)
@@ -230,10 +257,8 @@ def calculate_supplier_totals(date: str, rate: float) -> list[dict]:
         party_names[pid] = e.get("partyName", pid)
         entry_details[e["id"]] = e
 
-    # Resolve supplier names from collection
-    all_suppliers = list_documents(SUPPLIERS)
-    for s in all_suppliers:
-        supplier_names[s["id"]] = s["name"]
+    # Use cached supplier names instead of querying every time
+    supplier_names = _get_supplier_names()
 
     result = []
     for sid, parties in supplier_map.items():
@@ -653,6 +678,81 @@ def save_daily_carryover(date: str, balance: float) -> None:
 
 
 # ===================================================================
+# OPTIMIZED HELPERS (avoid repeat queries)
+# ===================================================================
+
+def _build_supplier_totals(entries: list[dict], rate: float) -> list[dict]:
+    """
+    Build supplier totals from pre-fetched weight entries.
+    Same logic as calculate_supplier_totals but without the extra query.
+    """
+    supplier_map: dict[str, dict[str, list]] = {}
+    party_names: dict[str, str] = {}
+
+    for e in entries:
+        sid = e["supplierId"]
+        pid = e["partyId"]
+        supplier_map.setdefault(sid, {}).setdefault(pid, []).append(e)
+        party_names[pid] = e.get("partyName", pid)
+
+    supplier_names = _get_supplier_names()
+
+    result = []
+    for sid, parties in supplier_map.items():
+        rows = []
+        supplier_total_live_weight = 0.0
+
+        for pid, weight_entries in parties.items():
+            party_load_total = round(sum(e.get("loadWeight", 0) for e in weight_entries), 3)
+            party_empty_total = round(sum(e.get("emptyWeight", 0) for e in weight_entries), 3)
+            party_live_total = round(sum(e.get("liveWeight", 0) for e in weight_entries), 3)
+            supplier_total_live_weight += party_live_total
+
+            rows.append({
+                "id": pid,
+                "party": party_names.get(pid, pid),
+                "a": party_load_total,
+                "b": party_empty_total,
+                "c": party_live_total,
+            })
+
+        result.append({
+            "id": sid,
+            "name": supplier_names.get(sid, sid),
+            "rows": rows,
+            "totalWeight": round(supplier_total_live_weight, 3),
+            "totalValue": round(supplier_total_live_weight * rate, 3),
+        })
+
+    return result
+
+
+def _calculate_totals_overview_prefetched(
+    date: str,
+    supplier_totals: list[dict],
+    carryover: float,
+) -> dict:
+    """
+    Totals overview using pre-fetched carryover (avoids duplicate query).
+    Still fetches deductions (cheap single query).
+    """
+    available = sum(s["totalWeight"] for s in supplier_totals)
+    subtotal = round(available + carryover, 3)
+
+    deductions = get_deduction_entries(date)
+    total_deductions = round(sum(d.get("amount", 0) for d in deductions), 3)
+    total_balance = round(subtotal - total_deductions, 3)
+
+    return {
+        "subtotal": subtotal,
+        "carryover": carryover,
+        "totalDeductions": total_deductions,
+        "deductions": deductions,
+        "totalBalance": total_balance,
+    }
+
+
+# ===================================================================
 # FULL DASHBOARD AGGREGATION
 # ===================================================================
 
@@ -661,19 +761,27 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     Build the complete dashboard state for a given date.
     Orchestrates: supplier totals → totals overview → financial breakdown
     → section F → grand total.
+    Uses parallel queries to reduce latency.
     """
-    # 1. Effective rate
-    rate = get_effective_rate(product_type, date)
+    # ── Parallel I/O phase: fire independent queries concurrently ──
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_rate = pool.submit(get_effective_rate, product_type, date)
+        f_weight = pool.submit(get_weight_entries, date)
+        f_sf = pool.submit(get_section_f_entries, date)
+        f_carry = pool.submit(_get_previous_day_carryover, date)
 
-    # 2. Supplier totals (left column)
-    #    - Regular suppliers (JOSEPH, SADIQ, etc.) use load/empty/live
-    #    - "OTHER CALCULATION" is Section-F (retail — only actual weight)
-    all_supplier_totals = calculate_supplier_totals(date, rate)
+        rate = f_rate.result()
+        all_weight_entries = f_weight.result()
+        sf_entries = f_sf.result()
+        carryover = f_carry.result()
+
+    # 2. Supplier totals built from pre-fetched weight entries (no extra query)
+    all_supplier_totals = _build_supplier_totals(all_weight_entries, rate)
     supplier_totals = [s for s in all_supplier_totals if s["name"] != "OTHER CALCULATION"]
     other_calc_supplier = [s for s in all_supplier_totals if s["name"] == "OTHER CALCULATION"]
 
-    # 3. Totals overview (center column — only regular suppliers)
-    totals = calculate_totals_overview(date, supplier_totals)
+    # 3. Totals overview (uses pre-fetched carryover, fetches deductions)
+    totals = _calculate_totals_overview_prefetched(date, supplier_totals, carryover)
 
     # 4. Financial breakdown (right column) — each sub-party × rate
     #    Custom formulas for specific parties:
@@ -761,13 +869,13 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
             "party": s["name"],
             "total": s["totalWeight"],
         })
-    # Add carryover if exists
-    if totals.get("carryover", 0) > 0:
-        totals_display.append({
-            "id": "carryover",
-            "party": "M.Iruppu",
-            "total": totals["carryover"],
-        })
+    # Always show Yesterday Stock row (editable manual entry)
+    totals_display.append({
+        "id": "yesterday_stock",
+        "party": "Yesterday Stock",
+        "total": totals["carryover"],
+        "editable": True,
+    })
 
     # 8. Deductions display (from totals dict)
     deductions_display = [

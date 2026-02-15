@@ -31,31 +31,46 @@ export const formatCurrency = (amount) =>
 export const formatWeight = (weight) =>
   typeof weight === 'number' ? weight.toFixed(3) : '0.000';
 
+// Request deduplication — prevent duplicate in-flight requests
+const _pending = new Map();
+
 /**
- * Generic fetch wrapper with auth header.
- * Throws on non-2xx responses with the server's detail message.
+ * Generic fetch wrapper with auth header and request deduplication.
+ * Identical GET requests in-flight are deduplicated automatically.
  */
 const api = async (path, method = 'GET', body = null) => {
+  const dedupeKey = method === 'GET' ? `${method}:${path}` : null;
+
+  // Return existing promise for duplicate GET requests
+  if (dedupeKey && _pending.has(dedupeKey)) {
+    return _pending.get(dedupeKey);
+  }
+
   const headers = { 'Content-Type': 'application/json' };
   if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`;
 
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
-  const res = await fetch(`${API_BASE}${path}`, opts);
+  const promise = fetch(`${API_BASE}${path}`, opts)
+    .then(async (res) => {
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const err = await res.json();
+          detail = err.detail || detail;
+        } catch { /* ignore parse errors */ }
+        throw new Error(detail);
+      }
+      if (res.status === 204) return null;
+      return res.json();
+    })
+    .finally(() => {
+      if (dedupeKey) _pending.delete(dedupeKey);
+    });
 
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const err = await res.json();
-      detail = err.detail || detail;
-    } catch { /* ignore parse errors */ }
-    throw new Error(detail);
-  }
-
-  // 204 No Content
-  if (res.status === 204) return null;
-  return res.json();
+  if (dedupeKey) _pending.set(dedupeKey, promise);
+  return promise;
 };
 
 // ===================================================================
@@ -191,6 +206,9 @@ export const getPriceRate = (date, productTypeId = 'chicken') =>
 
 export const createPriceRate = (data) =>
   api('/api/price-rates', 'POST', data);
+
+export const updatePriceRate = (data) =>
+  api('/api/price-rates', 'PUT', data);
 
 // ===================================================================
 // DASHBOARD INLINE-EDIT HELPERS

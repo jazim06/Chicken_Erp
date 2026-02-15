@@ -9,7 +9,7 @@ import { StatBar } from '../components/StatBar';
 import { SubPartyList } from '../components/SubPartyList';
 import { EntriesTable } from '../components/EntriesTable';
 import { WeightEntryModal } from '../components/WeightEntryModal';
-import { getSupplierById, getEntriesByDate, saveEntry, addSubParty, deleteSubParty } from '../utils/apiAdapter';
+import { getSupplierById, getEntriesByDate, saveEntry, updateWeightEntry, addSubParty, deleteSubParty } from '../utils/apiAdapter';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
@@ -22,6 +22,7 @@ const SupplierManagementPage = () => {
   const [entries, setEntries] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedParty, setSelectedParty] = useState(null);
+  const [editingEntry, setEditingEntry] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -58,19 +59,34 @@ const SupplierManagementPage = () => {
 
   const handleAddEntry = (party) => {
     setSelectedParty(party);
+    setEditingEntry(null);
+    setModalOpen(true);
+  };
+
+  const handleEditEntry = (entry) => {
+    setEditingEntry(entry);
+    setSelectedParty({ id: entry.partyId, name: entry.partyName });
     setModalOpen(true);
   };
 
   const handleSaveEntry = async (entryData) => {
     try {
-      await saveEntry({
-        supplierId: id,
-        partyId: selectedParty.id,
-        partyName: selectedParty.name,
-        date: format(selectedDate, 'yyyy-MM-dd'),
-        ...entryData
-      });
-      toast.success('Entry saved successfully!');
+      if (editingEntry?.id) {
+        // Update existing entry
+        await updateWeightEntry(editingEntry.id, entryData);
+        toast.success('Entry updated successfully!');
+      } else {
+        // Create new entry
+        await saveEntry({
+          supplierId: id,
+          partyId: selectedParty.id,
+          partyName: selectedParty.name,
+          date: format(selectedDate, 'yyyy-MM-dd'),
+          ...entryData
+        });
+        toast.success('Entry saved successfully!');
+      }
+      setEditingEntry(null);
       await loadSupplierData();
       await loadEntries();
     } catch (error) {
@@ -208,6 +224,7 @@ const SupplierManagementPage = () => {
             <EntriesTable
               entries={entries}
               selectedDate={format(selectedDate, 'yyyy-MM-dd')}
+              onEditEntry={handleEditEntry}
             />
           </div>
         </div>
@@ -216,10 +233,14 @@ const SupplierManagementPage = () => {
       {/* Weight Entry Modal */}
       <WeightEntryModal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => {
+          setModalOpen(false);
+          setEditingEntry(null);
+        }}
         party={selectedParty}
         onSave={handleSaveEntry}
         isRetail={id === 'supp_other_calc'}
+        editingEntry={editingEntry}
       />
     </div>
   );

@@ -10,7 +10,7 @@ import {
 } from './ui/table';
 import { formatWeight } from '../utils/apiAdapter';
 
-export const EntriesTable = ({ entries, selectedDate }) => {
+export const EntriesTable = ({ entries, selectedDate, onEditEntry }) => {
   if (!entries || entries.length === 0) {
     return (
       <Card className="p-8">
@@ -44,7 +44,12 @@ export const EntriesTable = ({ entries, selectedDate }) => {
           </TableHeader>
           <TableBody>
             {entries.map((entry) => (
-              <TableRow key={entry.id}>
+              <TableRow
+                key={entry.id}
+                onClick={() => onEditEntry && onEditEntry(entry)}
+                className="cursor-pointer hover:bg-muted/50 transition-colors"
+                title="Click to edit"
+              >
                 <TableCell className="font-medium">{entry.partyName}</TableCell>
                 <TableCell className="weight-display">
                   {formatWeight(entry.loadWeight)} kg
