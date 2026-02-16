@@ -39,12 +39,14 @@ from models import (
 )
 from services import (
     add_sub_party,
+    create_custom_financial_entry,
     create_deduction_entry,
     create_financial_entry,
     create_price_rate,
     create_section_f_entry,
     create_supplier,
     create_weight_entry,
+    delete_custom_financial_entry,
     delete_deduction_entry,
     delete_financial_entry,
     delete_section_f_entry,
@@ -60,7 +62,10 @@ from services import (
     get_weight_entries,
     reorder_financial_entries,
     save_daily_carryover,
+    save_atb_entry,
+    save_rms_entry,
     soft_delete_weight_entry,
+    update_custom_financial_entry,
     update_deduction_entry,
     update_financial_entry,
     update_section_f_entry,
@@ -422,6 +427,83 @@ async def read_price_rate(
 async def new_price_rate(body: PriceRateCreate, user: dict = Depends(get_current_user)):
     doc_id = create_price_rate(body.model_dump())
     return {"id": doc_id, **body.model_dump()}
+
+
+# ===================================================================
+# RMS ENTRIES
+# ===================================================================
+
+@app.put("/api/rms-entries")
+async def upsert_rms_entry(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Save or update the RMS amount (₹) for a given date."""
+    body = await request.json()
+    amount = float(body.get("amount", 0))
+    date = body.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    product_type = body.get("productType", "chicken")
+    result = save_rms_entry(date, product_type, amount)
+    return result
+
+
+# ===================================================================
+# ATB (Amount To Be Paid) ENTRIES
+# ===================================================================
+
+@app.put("/api/atb-entries")
+async def upsert_atb_entry(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Save or update the ATB rate for a given date."""
+    body = await request.json()
+    rate = float(body.get("rate", 0))
+    date = body.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    product_type = body.get("productType", "chicken")
+    result = save_atb_entry(date, product_type, rate)
+    return result
+
+
+# ===================================================================
+# CUSTOM FINANCIAL ENTRIES
+# ===================================================================
+
+@app.post("/api/custom-financial-entries", status_code=201)
+async def new_custom_financial_entry(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Create a custom financial entry (user-added party in breakdown)."""
+    body = await request.json()
+    return create_custom_financial_entry(body)
+
+
+@app.patch("/api/custom-financial-entries/{entry_id}")
+async def patch_custom_financial_entry(
+    entry_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Update weight/amount of a custom financial entry."""
+    body = await request.json()
+    try:
+        return update_custom_financial_entry(entry_id, body)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/custom-financial-entries/{entry_id}")
+async def remove_custom_financial_entry(
+    entry_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a custom financial entry."""
+    try:
+        delete_custom_financial_entry(entry_id)
+        return {"success": True}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.put("/api/price-rates")

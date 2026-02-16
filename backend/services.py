@@ -32,11 +32,22 @@ WEIGHT_ENTRIES = "weight_entries"
 FINANCIAL_ENTRIES = "financial_entries"
 SECTION_F_ENTRIES = "section_f_entries"
 DEDUCTION_ENTRIES = "deduction_entries"
+RMS_ENTRIES = "rms_entries"
+ATB_ENTRIES = "atb_entries"
+CUSTOM_FINANCIAL_ENTRIES = "custom_financial_entries"
 PRICE_RATES = "price_rates"
 SUPPLIERS = "suppliers"
 SUB_PARTIES = "sub_parties"
 PRODUCTS = "products"
 USERS = "users"
+
+# Default financial breakdown party list (in display order)
+DEFAULT_FINANCIAL_PARTIES = [
+    'RMS', 'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
+    'Masthan', 'MBB', 'Al Ayaan', 'Anas', 'Anna city',
+    'B.Less', 'Saleem Bhai', 'Ramesh', 'School', '110',
+    'Daas', 'Mahendran', 'Iruppu',
+]
 
 # ---------------------------------------------------------------------------
 # Fallback seed data (when Firestore is empty)
@@ -530,6 +541,169 @@ def get_section_f_entries(date: str) -> list[dict]:
 
 
 # ===================================================================
+# RMS ENTRIES CRUD
+# ===================================================================
+
+def get_rms_entry(date: str, product_type: str = "chicken") -> dict | None:
+    """Get the RMS amount entry for a date."""
+    cache_key = f"rms:{product_type}:{date}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    entries = list_documents(
+        RMS_ENTRIES,
+        filters=[("date", "==", date), ("productType", "==", product_type)],
+    )
+    result = entries[0] if entries else None
+    cache_set(cache_key, result, ttl_seconds=120)
+    return result
+
+
+def save_rms_entry(date: str, product_type: str, amount: float) -> dict:
+    """Create or update an RMS amount entry for a date (stores ₹ directly)."""
+    db = get_firestore_client()
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    existing = list(
+        db.collection(RMS_ENTRIES)
+        .where(filter=FieldFilter("date", "==", date))
+        .where(filter=FieldFilter("productType", "==", product_type))
+        .limit(1)
+        .stream()
+    )
+    doc = next(iter(existing), None)
+    if doc:
+        db.collection(RMS_ENTRIES).document(doc.id).update({"amount": amount})
+        result = {"id": doc.id, "date": date, "productType": product_type, "amount": amount}
+    else:
+        doc_data = {
+            "date": date,
+            "productType": product_type,
+            "amount": amount,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+        doc_id = create_document(RMS_ENTRIES, doc_data)
+        result = {"id": doc_id, **doc_data}
+    cache_invalidate("rms:")
+    cache_invalidate("dashboard:")
+    return result
+
+
+# ===================================================================
+# ATB (Amount To Be Paid) ENTRIES CRUD
+# ===================================================================
+
+def get_atb_entry(date: str, product_type: str = "chicken") -> dict | None:
+    """Get the ATB rate entry for a date."""
+    cache_key = f"atb:{product_type}:{date}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    entries = list_documents(
+        ATB_ENTRIES,
+        filters=[("date", "==", date), ("productType", "==", product_type)],
+    )
+    result = entries[0] if entries else None
+    cache_set(cache_key, result, ttl_seconds=120)
+    return result
+
+
+def save_atb_entry(date: str, product_type: str, rate: float) -> dict:
+    """Create or update an ATB rate entry for a date."""
+    db = get_firestore_client()
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    existing = list(
+        db.collection(ATB_ENTRIES)
+        .where(filter=FieldFilter("date", "==", date))
+        .where(filter=FieldFilter("productType", "==", product_type))
+        .limit(1)
+        .stream()
+    )
+    doc = next(iter(existing), None)
+    if doc:
+        db.collection(ATB_ENTRIES).document(doc.id).update({"rate": rate})
+        result = {"id": doc.id, "date": date, "productType": product_type, "rate": rate}
+    else:
+        doc_data = {
+            "date": date,
+            "productType": product_type,
+            "rate": rate,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+        doc_id = create_document(ATB_ENTRIES, doc_data)
+        result = {"id": doc_id, **doc_data}
+    cache_invalidate("atb:")
+    cache_invalidate("dashboard:")
+    return result
+
+
+# ===================================================================
+# CUSTOM FINANCIAL ENTRIES CRUD
+# ===================================================================
+
+def get_custom_financial_entries(date: str, product_type: str = "chicken") -> list[dict]:
+    """Get all custom financial entries for a date."""
+    cache_key = f"custom_fin:{product_type}:{date}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    entries = list_documents(
+        CUSTOM_FINANCIAL_ENTRIES,
+        filters=[("date", "==", date), ("productType", "==", product_type)],
+    )
+    cache_set(cache_key, entries, ttl_seconds=120)
+    return entries
+
+
+def create_custom_financial_entry(data: dict) -> dict:
+    """Create a custom financial entry (user-added party in financial breakdown)."""
+    doc = {
+        "partyName": data["partyName"],
+        "weight": float(data.get("weight", 0)),
+        "amount": float(data.get("amount", 0)),
+        "date": data["date"],
+        "productType": data.get("productType", "chicken"),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    doc_id = create_document(CUSTOM_FINANCIAL_ENTRIES, doc)
+    doc["id"] = doc_id
+    cache_invalidate("custom_fin:")
+    cache_invalidate("dashboard:")
+    return doc
+
+
+def update_custom_financial_entry(entry_id: str, data: dict) -> dict:
+    """Update weight/amount of a custom financial entry."""
+    db = get_firestore_client()
+    doc_ref = db.collection(CUSTOM_FINANCIAL_ENTRIES).document(entry_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise LookupError(f"Custom financial entry {entry_id} not found")
+    updates = {}
+    if "weight" in data:
+        updates["weight"] = float(data["weight"])
+    if "amount" in data:
+        updates["amount"] = float(data["amount"])
+    if updates:
+        doc_ref.update(updates)
+    result = {"id": entry_id, **doc.to_dict(), **updates}
+    cache_invalidate("custom_fin:")
+    cache_invalidate("dashboard:")
+    return result
+
+
+def delete_custom_financial_entry(entry_id: str) -> None:
+    """Delete a custom financial entry."""
+    db = get_firestore_client()
+    doc_ref = db.collection(CUSTOM_FINANCIAL_ENTRIES).document(entry_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise LookupError(f"Custom financial entry {entry_id} not found")
+    doc_ref.delete()
+    cache_invalidate("custom_fin:")
+    cache_invalidate("dashboard:")
+
+
+# ===================================================================
 # DEDUCTION ENTRIES CRUD
 # ===================================================================
 
@@ -825,7 +999,8 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     # 3. Totals overview (uses pre-fetched carryover, fetches deductions)
     totals = _calculate_totals_overview_prefetched(date, supplier_totals, carryover)
 
-    # 4. Financial breakdown (right column) — each sub-party × rate
+    # 4. Financial breakdown — built from deduction entries + RMS (not supplier subparties)
+    #    Each deduction party's weight × PR rate = amount
     #    Custom formulas for specific parties:
     #      Parveen:     (Paper rate - 3) × weight
     #      Anna City:   (Weight × 1.5) × (Paper rate + 4)
@@ -835,7 +1010,7 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
             "calc": lambda w, r: round((r - 3) * w, 2),
             "label": "(Paper rate - 3) × Weight",
         },
-        "Anna City": {
+        "Anna city": {
             "calc": lambda w, r: round((w * 1.5) * (r + 4), 2),
             "label": "(Weight × 1.5) × (Paper rate + 4)",
         },
@@ -845,51 +1020,109 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         },
     }
 
+    # Build a lookup from deduction entries {partyName (lowered): {partyName, amount}}
+    deduction_lookup = {}
+    for d in totals.get("deductions", []):
+        deduction_lookup[d["partyName"].strip().lower()] = d
+
+    # Get RMS entry (client-entered amount in ₹ directly)
+    rms_entry = get_rms_entry(date, product_type)
+    rms_amount = rms_entry.get("amount", rms_entry.get("weight", 0)) if rms_entry else 0.0
+
+    # Get ATB entry (persisted rate)
+    atb_entry = get_atb_entry(date, product_type)
+    atb_rate = atb_entry["rate"] if atb_entry else 0.0
+
     financial = []
     financial_total = 0.0
-    for supplier in supplier_totals:
-        for row in supplier["rows"]:
-            live_weight = row["c"]  # Column C = live weight
-            party_name = row["party"]
-            formula_info = CUSTOM_FORMULAS.get(party_name)
-            if formula_info:
-                amount = formula_info["calc"](live_weight, rate)
-                formula_label = formula_info["label"]
-            else:
-                amount = round(live_weight * rate, 2)
-                formula_label = None
+    seen_parties = set()  # track which deductions are already matched
+
+    for party_name in DEFAULT_FINANCIAL_PARTIES:
+        key = party_name.strip().lower()
+        seen_parties.add(key)
+
+        if party_name == "RMS":
+            # RMS: client enters amount directly (no weight × rate calculation)
+            amount = round(rms_amount, 2)
             financial.append({
-                "id": row["id"],
-                "name": party_name,
-                "weight": live_weight,
+                "id": "fin_rms",
+                "name": "RMS",
+                "weight": None,
                 "ratePerKg": rate,
                 "amount": amount,
-                "supplierName": supplier["name"],
-                "formula": formula_label,
+                "formula": None,
+                "isRms": True,
+                "isCustom": False,
             })
             financial_total += amount
-    # Also add Other Calculation sub-parties (retail weight × rate)
-    for supplier in other_calc_supplier:
-        for row in supplier["rows"]:
-            weight = row["c"]  # For Section F, C = actual weight entered
-            party_name = row["party"]
+            continue
+
+        # Other parties: match deduction entry by name (case-insensitive)
+        ded = deduction_lookup.get(key)
+        weight = ded["amount"] if ded else 0.0
+
+        formula_info = CUSTOM_FORMULAS.get(party_name)
+        if formula_info and weight > 0:
+            amount = formula_info["calc"](weight, rate)
+            formula_label = formula_info["label"]
+        else:
+            amount = round(weight * rate, 2) if weight > 0 else 0
+            formula_label = None
+
+        financial.append({
+            "id": f"fin_{party_name.lower().replace(' ', '_')}",
+            "name": party_name,
+            "weight": round(weight, 3),
+            "ratePerKg": rate,
+            "amount": amount,
+            "formula": formula_label,
+            "isRms": party_name == "RMS",
+            "isCustom": False,
+        })
+        financial_total += amount
+
+    # Auto-add deduction entries not in the default list
+    for key, ded in deduction_lookup.items():
+        if key not in seen_parties:
+            weight = ded["amount"]
+            party_name = ded["partyName"]
             formula_info = CUSTOM_FORMULAS.get(party_name)
-            if formula_info:
+            if formula_info and weight > 0:
                 amount = formula_info["calc"](weight, rate)
                 formula_label = formula_info["label"]
             else:
-                amount = round(weight * rate, 2)
+                amount = round(weight * rate, 2) if weight > 0 else 0
                 formula_label = None
             financial.append({
-                "id": row["id"],
+                "id": f"fin_{key.replace(' ', '_')}",
                 "name": party_name,
-                "weight": weight,
+                "weight": round(weight, 3),
                 "ratePerKg": rate,
                 "amount": amount,
-                "supplierName": supplier["name"],
                 "formula": formula_label,
+                "isRms": False,
+                "isCustom": False,
             })
             financial_total += amount
+
+    # Auto-add custom financial entries (user-added parties)
+    custom_entries = get_custom_financial_entries(date, product_type)
+    for ce in custom_entries:
+        party_name = ce.get("partyName", "Unknown")
+        weight = ce.get("weight", 0)
+        amount = ce.get("amount", 0)
+        financial.append({
+            "id": ce["id"],
+            "name": party_name,
+            "weight": round(weight, 3) if weight else 0,
+            "ratePerKg": rate,
+            "amount": round(amount, 2),
+            "formula": None,
+            "isRms": False,
+            "isCustom": True,
+        })
+        financial_total += amount
+
     financial_total = round(financial_total, 2)
 
     # 5. Section F (other calculations)
@@ -951,6 +1184,7 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     result = {
         "date": date,
         "effectivePrRate": rate,
+        "atbRate": atb_rate,
         "suppliers": supplier_totals,
         "otherCalculations": other_calc,
         "totalsOverview": totals_display,

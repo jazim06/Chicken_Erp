@@ -29,6 +29,11 @@ import {
   updateDeductionEntry,
   deleteDeductionEntry,
   updatePriceRate,
+  updateRMSEntry,
+  updateATBEntry,
+  createCustomFinancialEntry,
+  updateCustomFinancialEntry,
+  deleteCustomFinancialEntry,
   formatCurrency,
   formatWeight
 } from '../utils/apiAdapter';
@@ -64,6 +69,24 @@ const SupplierDashboardPage = () => {
   const [editingRate, setEditingRate] = useState(false);
   const [editRateValue, setEditRateValue] = useState('');
 
+  // ATB (Amount To Be Paid) rate
+  const [atbRate, setAtbRate] = useState('');
+  const [savingAtb, setSavingAtb] = useState(false);
+
+  // RMS editing state
+  const [editingRms, setEditingRms] = useState(false);
+  const [rmsValue, setRmsValue] = useState('');
+  const [savingRms, setSavingRms] = useState(false);
+
+  // Financial breakdown local state (editable)
+  const [financialEntries, setFinancialEntries] = useState([]);
+  const [editingFinWeight, setEditingFinWeight] = useState(null); // entry id being edited
+  const [editingFinAmount, setEditingFinAmount] = useState(null); // entry id being edited
+  const [finWeightValue, setFinWeightValue] = useState('');
+  const [finAmountValue, setFinAmountValue] = useState('');
+  const [addFinPartyName, setAddFinPartyName] = useState('');
+  const [showAddFinEntry, setShowAddFinEntry] = useState(false);
+
   // Hardcoded deduction party list
   const DEDUCTION_PARTIES = [
     'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
@@ -81,6 +104,14 @@ const SupplierDashboardPage = () => {
     if (dashboardData) {
       const stockItem = dashboardData.totalsOverview?.find(i => i.id === 'yesterday_stock');
       setYesterdayStock(stockItem?.total || 0);
+      // Sync ATB rate from persisted data
+      if (dashboardData.atbRate) {
+        setAtbRate(String(dashboardData.atbRate));
+      }
+      // Sync financial entries for local editing
+      if (dashboardData.financial) {
+        setFinancialEntries(dashboardData.financial.map(item => ({ ...item })));
+      }
     }
   }, [dashboardData]);
 
@@ -339,8 +370,93 @@ const SupplierDashboardPage = () => {
   const calculateOtherTotal = () => otherTotal;
   const calculateSubtotal = () => subtotal;
 
+  // Custom formulas for recalculating amount from weight
+  const CUSTOM_FORMULAS = useMemo(() => ({
+    'Parveen': (w, r) => Math.round(((r - 3) * w) * 100) / 100,
+    'Anna city': (w, r) => Math.round(((w * 1.5) * (r + 4)) * 100) / 100,
+    'Saleem Bhai': (w, r) => Math.round(((w * 1.6) * (r + 5)) * 100) / 100,
+  }), []);
+
   const calculateGrandTotal = () => {
+    // Use local financial entries for grand total
+    if (financialEntries.length > 0) {
+      return financialEntries.reduce((sum, item) => sum + (item.amount || 0), 0);
+    }
     return dashboardData?.financialTotal || 0;
+  };
+
+  const recalcAmount = (name, weight, rate) => {
+    const formula = CUSTOM_FORMULAS[name];
+    if (formula && weight > 0) return formula(weight, rate);
+    return weight > 0 ? Math.round(weight * rate * 100) / 100 : 0;
+  };
+
+  // Handlers for financial entry editing
+  const handleFinWeightSave = (item) => {
+    const newWeight = parseFloat(finWeightValue) || 0;
+    const rate = item.ratePerKg || 0;
+    const newAmount = recalcAmount(item.name, newWeight, rate);
+    setFinancialEntries(prev =>
+      prev.map(e => e.id === item.id ? { ...e, weight: newWeight, amount: newAmount } : e)
+    );
+    setEditingFinWeight(null);
+    // Persist if custom entry
+    if (item.isCustom) {
+      updateCustomFinancialEntry(item.id, { weight: newWeight, amount: newAmount }).catch(() => {});
+    }
+  };
+
+  const handleFinAmountSave = (item) => {
+    const newAmount = parseFloat(finAmountValue) || 0;
+    setFinancialEntries(prev =>
+      prev.map(e => e.id === item.id ? { ...e, amount: newAmount } : e)
+    );
+    setEditingFinAmount(null);
+    // Persist if custom entry
+    if (item.isCustom) {
+      updateCustomFinancialEntry(item.id, { amount: newAmount }).catch(() => {});
+    }
+  };
+
+  const handleAddFinEntry = async () => {
+    const name = addFinPartyName.trim();
+    if (!name) return;
+    try {
+      const result = await createCustomFinancialEntry({
+        partyName: name,
+        weight: 0,
+        amount: 0,
+        date: dateStr,
+        productType: 'chicken',
+      });
+      setFinancialEntries(prev => [...prev, {
+        id: result.id,
+        name: result.partyName,
+        weight: 0,
+        ratePerKg: dashboardData?.priceRate || 0,
+        amount: 0,
+        formula: null,
+        isRms: false,
+        isCustom: true,
+      }]);
+      setAddFinPartyName('');
+      setShowAddFinEntry(false);
+      toast.success(`Added ${name}`);
+    } catch (err) {
+      toast.error('Failed to add entry');
+    }
+  };
+
+  const handleRemoveFinEntry = async (item) => {
+    if (item.isCustom) {
+      try {
+        await deleteCustomFinancialEntry(item.id);
+        toast.success(`Removed ${item.name}`);
+      } catch (err) {
+        toast.error('Failed to remove entry');
+      }
+    }
+    setFinancialEntries(prev => prev.filter(e => e.id !== item.id));
   };
 
   const calculateTotalBalance = () => {
@@ -735,6 +851,55 @@ const SupplierDashboardPage = () => {
                 </p>
               </div>
             </Card>
+
+            {/* ATB (Amount To Be Paid) Card */}
+            <Card className="p-6 shadow-sm bg-gradient-to-br from-green-50 to-white border-2 border-green-200">
+              <div className="text-center space-y-3">
+                <p className="text-sm font-semibold text-green-700 uppercase tracking-wider">
+                  Amount To Be Paid (ATB)
+                </p>
+                <div className="flex items-center justify-center gap-2 text-lg font-semibold text-gray-700">
+                  <span className="font-mono">{formatWeight(dashboardData?.totalBalance || 0)}</span>
+                  <span>kg</span>
+                  <span className="text-green-600">×</span>
+                  <input
+                    type="number"
+                    value={atbRate}
+                    onChange={(e) => setAtbRate(e.target.value)}
+                    placeholder="0"
+                    step="0.01"
+                    min="0"
+                    className="w-28 h-9 px-2 border-2 border-green-300 rounded-md text-center font-mono focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent"
+                  />
+                  <span>₹/kg</span>
+                  <Button
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700 text-white h-9 px-4"
+                    disabled={savingAtb}
+                    onClick={async () => {
+                      setSavingAtb(true);
+                      try {
+                        await updateATBEntry(dateStr, parseFloat(atbRate) || 0);
+                        toast.success('ATB rate saved');
+                      } catch (err) {
+                        toast.error('Failed to save ATB rate');
+                      }
+                      setSavingAtb(false);
+                    }}
+                  >
+                    {savingAtb ? '...' : 'Save'}
+                  </Button>
+                </div>
+                {atbRate && parseFloat(atbRate) > 0 && (
+                  <div className="pt-2 border-t border-green-200">
+                    <p className="text-sm text-gray-600 mb-1">Total Amount</p>
+                    <p className="text-3xl font-bold text-green-600 font-mono">
+                      ₹{((dashboardData?.totalBalance || 0) * parseFloat(atbRate)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </Card>
           </div>
 
           {/* RIGHT COLUMN */}
@@ -742,49 +907,194 @@ const SupplierDashboardPage = () => {
             <Card className="p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Financial Breakdown</h2>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs border-blue-300 text-blue-600 hover:bg-blue-50"
+                  onClick={() => setShowAddFinEntry(true)}
+                >
+                  <Plus className="h-3 w-3 mr-1" /> Add Entry
+                </Button>
               </div>
-              <div className="space-y-0.5">
-                <div className="flex items-center justify-between py-2 border-b border-gray-200 font-semibold text-xs text-gray-600">
-                  <span>NAME</span>
-                  <span className="text-right">WEIGHT</span>
-                  <span className="text-right">AMOUNT (₹)</span>
+
+              {/* Add Entry Inline Form */}
+              {showAddFinEntry && (
+                <div className="flex items-center gap-2 mb-3 p-2 bg-blue-50 rounded border border-blue-200">
+                  <input
+                    type="text"
+                    value={addFinPartyName}
+                    onChange={(e) => setAddFinPartyName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddFinEntry();
+                      if (e.key === 'Escape') { setShowAddFinEntry(false); setAddFinPartyName(''); }
+                    }}
+                    placeholder="Party name"
+                    autoFocus
+                    className="flex-1 h-7 px-2 text-sm border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-7 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs"
+                    onClick={handleAddFinEntry}
+                    disabled={!addFinPartyName.trim()}
+                  >
+                    Add
+                  </Button>
+                  <button
+                    onClick={() => { setShowAddFinEntry(false); setAddFinPartyName(''); }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                {(() => {
-                  // Group financial entries by supplier
-                  const grouped = {};
-                  (dashboardData?.financial || []).forEach(item => {
-                    const key = item.supplierName || 'Other';
-                    if (!grouped[key]) grouped[key] = [];
-                    grouped[key].push(item);
-                  });
-                  return Object.entries(grouped).map(([supplierName, items]) => (
-                    <div key={supplierName}>
-                      <div className="py-1.5 px-2 text-xs font-bold text-gray-500 uppercase tracking-wider bg-gray-50 mt-1">
-                        {supplierName}
-                      </div>
-                      {items.map(item => (
-                        <div key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <div className="flex items-center justify-between py-2 text-sm">
-                            <span className="text-gray-900 px-2 flex-1">{item.name}</span>
-                            <span className="text-gray-600 px-2 font-mono text-xs w-20 text-right">
-                              {formatWeight(item.weight)}
-                            </span>
-                            <span className="text-gray-900 px-2 font-mono text-right w-24">
-                              {formatCurrency(item.amount)}
-                            </span>
-                          </div>
-                          {item.formula && (
-                            <div className="px-2 pb-1.5 -mt-1">
-                              <span className="text-[10px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded font-mono">
-                                ƒ {item.formula}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+              )}
+
+              <div className="space-y-0.5">
+                <div className="flex items-center py-2 border-b border-gray-200 font-semibold text-xs text-gray-600">
+                  <span className="flex-1">NAME</span>
+                  <span className="w-24 text-right">WEIGHT</span>
+                  <span className="w-28 text-right">AMOUNT (₹)</span>
+                  <span className="w-6"></span>
+                </div>
+                {financialEntries.map(item => (
+                  <div key={item.id} className="group border-b border-gray-100 hover:bg-gray-50">
+                    <div className="flex items-center py-2 text-sm">
+                      <span className="text-gray-900 px-2 flex-1">{item.name}</span>
+
+                      {/* WEIGHT COLUMN */}
+                      {item.isRms ? (
+                        <span className="text-gray-400 px-2 font-mono text-xs w-24 text-right">—</span>
+                      ) : editingFinWeight === item.id ? (
+                        <span className="w-24 text-right px-1">
+                          <input
+                            type="number"
+                            value={finWeightValue}
+                            onChange={(e) => setFinWeightValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleFinWeightSave(item);
+                              if (e.key === 'Escape') setEditingFinWeight(null);
+                            }}
+                            onBlur={() => handleFinWeightSave(item)}
+                            autoFocus
+                            step="0.001"
+                            className="w-full h-7 text-right font-mono text-xs border border-blue-300 rounded px-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        </span>
+                      ) : (
+                        <span
+                          className="text-gray-600 px-2 font-mono text-xs w-24 text-right cursor-pointer hover:bg-blue-50 rounded"
+                          onClick={() => {
+                            setFinWeightValue(item.weight || '');
+                            setEditingFinWeight(item.id);
+                          }}
+                          title="Click to edit weight"
+                        >
+                          {item.weight > 0 ? formatWeight(item.weight) : '—'}
+                        </span>
+                      )}
+
+                      {/* AMOUNT COLUMN */}
+                      {item.isRms ? (
+                        editingRms ? (
+                          <span className="w-28 text-right px-1">
+                            <input
+                              type="number"
+                              value={rmsValue}
+                              onChange={(e) => setRmsValue(e.target.value)}
+                              onKeyDown={async (e) => {
+                                if (e.key === 'Enter') {
+                                  setSavingRms(true);
+                                  try {
+                                    await updateRMSEntry(dateStr, parseFloat(rmsValue) || 0);
+                                    await loadDashboard();
+                                    toast.success('RMS amount saved');
+                                  } catch (err) {
+                                    toast.error('Failed to save RMS');
+                                  }
+                                  setSavingRms(false);
+                                  setEditingRms(false);
+                                } else if (e.key === 'Escape') {
+                                  setEditingRms(false);
+                                }
+                              }}
+                              onBlur={async () => {
+                                setSavingRms(true);
+                                try {
+                                  await updateRMSEntry(dateStr, parseFloat(rmsValue) || 0);
+                                  await loadDashboard();
+                                  toast.success('RMS amount saved');
+                                } catch (err) {
+                                  toast.error('Failed to save RMS');
+                                }
+                                setSavingRms(false);
+                                setEditingRms(false);
+                              }}
+                              autoFocus
+                              step="1"
+                              className="w-full h-7 text-right font-mono text-xs border border-blue-300 rounded px-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            />
+                          </span>
+                        ) : (
+                          <span
+                            className="text-blue-600 px-2 font-mono text-right w-28 cursor-pointer hover:bg-blue-50 rounded"
+                            onClick={() => {
+                              setRmsValue(item.amount || '');
+                              setEditingRms(true);
+                            }}
+                            title="Click to edit RMS amount"
+                          >
+                            {item.amount > 0 ? formatCurrency(item.amount) : <span className="text-gray-400 italic">enter ₹</span>}
+                          </span>
+                        )
+                      ) : editingFinAmount === item.id ? (
+                        <span className="w-28 text-right px-1">
+                          <input
+                            type="number"
+                            value={finAmountValue}
+                            onChange={(e) => setFinAmountValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleFinAmountSave(item);
+                              if (e.key === 'Escape') setEditingFinAmount(null);
+                            }}
+                            onBlur={() => handleFinAmountSave(item)}
+                            autoFocus
+                            step="1"
+                            className="w-full h-7 text-right font-mono text-xs border border-blue-300 rounded px-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        </span>
+                      ) : (
+                        <span
+                          className="text-gray-900 px-2 font-mono text-right w-28 cursor-pointer hover:bg-blue-50 rounded"
+                          onClick={() => {
+                            setFinAmountValue(item.amount || '');
+                            setEditingFinAmount(item.id);
+                          }}
+                          title="Click to edit amount"
+                        >
+                          {item.amount > 0 ? formatCurrency(item.amount) : '₹0'}
+                        </span>
+                      )}
+
+                      {/* REMOVE BUTTON */}
+                      <span className="w-6 flex justify-center">
+                        <button
+                          onClick={() => handleRemoveFinEntry(item)}
+                          className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                          title="Remove entry"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </span>
                     </div>
-                  ));
-                })()}
+                    {item.formula && (
+                      <div className="px-2 pb-1.5 -mt-1">
+                        <span className="text-[10px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded font-mono">
+                          ƒ {item.formula}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </Card>
 

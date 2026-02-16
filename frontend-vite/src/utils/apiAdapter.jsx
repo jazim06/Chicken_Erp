@@ -298,6 +298,33 @@ export const deleteDashboardEntry = async (type, id) => {
 export const getDeductionEntries = (date) =>
   api(`/api/deduction-entries?date=${date}`);
 
+// ===================================================================
+// RMS ENTRIES
+// ===================================================================
+
+export const updateRMSEntry = (date, amount, productType = 'chicken') =>
+  api('/api/rms-entries', 'PUT', { date, amount, productType });
+
+// ===================================================================
+// ATB (Amount To Be Paid) ENTRIES
+// ===================================================================
+
+export const updateATBEntry = (date, rate, productType = 'chicken') =>
+  api('/api/atb-entries', 'PUT', { date, rate, productType });
+
+// ===================================================================
+// CUSTOM FINANCIAL ENTRIES
+// ===================================================================
+
+export const createCustomFinancialEntry = (data) =>
+  api('/api/custom-financial-entries', 'POST', data);
+
+export const updateCustomFinancialEntry = (id, data) =>
+  api(`/api/custom-financial-entries/${id}`, 'PATCH', data);
+
+export const deleteCustomFinancialEntry = (id) =>
+  api(`/api/custom-financial-entries/${id}`, 'DELETE');
+
 export const createDeductionEntry = (data) =>
   api('/api/deduction-entries', 'POST', data);
 
