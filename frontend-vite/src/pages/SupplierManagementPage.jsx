@@ -148,14 +148,23 @@ const SupplierManagementPage = () => {
   const SUB_PARTY_ORDER = {
     'Joseph': ['RMS', 'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen'],
     'Sadiq': ['RMS', 'Masthan'],
-    'Other Calculations': ['Anas', 'Anna city', 'B. Less', 'Sk', 'RMS', 'Saleem Bhai', 'Ramesh', 'School', '110', 'Daas', 'Mahendran']
+    'Other Calculation': ['Anas', 'Anna City', 'B.Less', 'Sk', 'RMS', 'Saleem Bhai', 'Ramesh', 'School', '110', 'Daas', 'Mahendran']
+  };
+
+  // Normalize a name for comparison: lowercase, remove spaces and dots
+  const normalizeName = (name) => (name || '').toLowerCase().replace(/[\s.]+/g, '');
+
+  // Find the index of a name in the order list using fuzzy matching
+  const findOrderIndex = (name, order) => {
+    const normalized = normalizeName(name);
+    return order.findIndex(o => normalizeName(o) === normalized);
   };
 
   const sortSubPartiesBySupplier = (parties) => {
     const supplierName = supplier?.name;
-    // Case-insensitive lookup
+    // Case-insensitive lookup for supplier name
     const orderKey = Object.keys(SUB_PARTY_ORDER).find(
-      key => key.toLowerCase() === supplierName?.toLowerCase()
+      key => normalizeName(key) === normalizeName(supplierName)
     );
     const order = orderKey ? SUB_PARTY_ORDER[orderKey] : [];
     
@@ -164,8 +173,8 @@ const SupplierManagementPage = () => {
     }
     
     return [...parties].sort((a, b) => {
-      const indexA = order.indexOf(a.name);
-      const indexB = order.indexOf(b.name);
+      const indexA = findOrderIndex(a.name, order);
+      const indexB = findOrderIndex(b.name, order);
       
       // Items in order come first (sorted by order)
       if (indexA !== -1 && indexB !== -1) return indexA - indexB;
@@ -189,15 +198,15 @@ const SupplierManagementPage = () => {
   const sortedEntries = (() => {
     const supplierName = supplier?.name;
     const orderKey = Object.keys(SUB_PARTY_ORDER).find(
-      key => key.toLowerCase() === supplierName?.toLowerCase()
+      key => normalizeName(key) === normalizeName(supplierName)
     );
     const order = orderKey ? SUB_PARTY_ORDER[orderKey] : [];
     
     if (order.length === 0) return entries;
     
     return [...entries].sort((a, b) => {
-      const indexA = order.indexOf(a.partyName);
-      const indexB = order.indexOf(b.partyName);
+      const indexA = findOrderIndex(a.partyName, order);
+      const indexB = findOrderIndex(b.partyName, order);
       if (indexA !== -1 && indexB !== -1) return indexA - indexB;
       if (indexA !== -1) return -1;
       if (indexB !== -1) return 1;
