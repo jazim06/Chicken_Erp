@@ -274,7 +274,7 @@ async def new_sub_party(
 async def remove_sub_party(
     supplier_id: str,
     sub_party_id: str,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_optional_user),
 ):
     try:
         delete_sub_party(supplier_id, sub_party_id)
@@ -318,7 +318,7 @@ async def patch_weight_entry(
 
 
 @app.delete("/api/weight-entries/{entry_id}")
-async def remove_weight_entry(entry_id: str, user: dict = Depends(get_current_user)):
+async def remove_weight_entry(entry_id: str, user: dict = Depends(get_optional_user)):
     try:
         soft_delete_weight_entry(entry_id)
         return {"success": True}

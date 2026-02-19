@@ -15,7 +15,7 @@ import {
 } from './ui/alert-dialog';
 import { formatWeight } from '../utils/apiAdapter';
 
-export const SubPartyList = ({ subParties, onAddEntry, onAddSubParty, onDeleteSubParty }) => {
+export const SubPartyList = ({ subParties, allSubParties, entries, onAddEntry, onAddSubParty, onDeleteSubParty, selectedDate }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [newPartyName, setNewPartyName] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -36,9 +36,16 @@ export const SubPartyList = ({ subParties, onAddEntry, onAddSubParty, onDeleteSu
   return (
     <Card className="p-6">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-heading font-bold uppercase tracking-wider text-foreground">
-          Sub-Parties
-        </h3>
+        <div>
+          <h3 className="text-sm font-heading font-bold uppercase tracking-wider text-foreground">
+            Sub-Parties
+          </h3>
+          {entries.length > 0 && (
+        <p className="text-xs text-muted-foreground mt-1">
+              {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
+            </p>
+          )}
+        </div>
         <Button
           size="sm"
           variant="outline"
@@ -50,12 +57,94 @@ export const SubPartyList = ({ subParties, onAddEntry, onAddSubParty, onDeleteSu
         </Button>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-2">
+        {/* Show message if no entries today */}
+        {subParties.length === 0 && !isAdding && (
+          <div className="p-3 rounded-lg bg-muted/50 border border-dashed text-center">
+            <p className="text-sm text-muted-foreground">No entries yet for today</p>
+          </div>
+        )}
+
+        {/* Sub-parties with entries today */}
+        <div className="space-y-2">
+          {subParties.map((party, index) => {
+            const entryForParty = entries.find(e => e.partyName === party.name);
+            const hasWeight = entryForParty && entryForParty.liveWeight > 0;
+
+            return (
+              <div
+                key={party.id}
+                className={`p-3 rounded-lg border-2 transition-all ${
+                  hasWeight
+                    ? 'border-green-400 bg-green-50 dark:bg-green-950/20'
+                    : 'border-border bg-card hover:bg-muted/50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className={`font-medium text-sm truncate ${
+                      hasWeight ? 'text-green-700 dark:text-green-300' : ''
+                    }`}>
+                      {party.name}
+                    </p>
+                    {entryForParty && (
+                      <p className={`text-xs ${
+                        hasWeight
+                          ? 'text-green-600 dark:text-green-400 font-semibold'
+                          : 'text-muted-foreground'
+                      }`}>
+                        {hasWeight ? `✓ ${formatWeight(entryForParty.liveWeight)} kg` : 'No weight entered'}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-shrink-0 h-8 w-8 p-0"
+                    onClick={() => onAddEntry(party)}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                  <AlertDialog open={deleteConfirm === party.id} onOpenChange={(open) => {
+                    if (!open) setDeleteConfirm(null);
+                  }}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-shrink-0 h-8 w-8 p-0 text-destructive hover:text-destructive"
+                      onClick={() => setDeleteConfirm(party.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Sub-Party</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to delete {party.name}? This action cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => handleDelete(party.id)}
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                          Delete
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
         {/* Add New Party Input */}
         {isAdding && (
           <div className="flex gap-2 p-3 rounded-lg bg-accent/30 border border-primary/30">
             <Input
-              placeholder="Enter party name"
+              placeholder="Enter party name (adds to all suppliers)"
               value={newPartyName}
               onChange={(e) => setNewPartyName(e.target.value)}
               onKeyDown={(e) => {
@@ -88,62 +177,7 @@ export const SubPartyList = ({ subParties, onAddEntry, onAddSubParty, onDeleteSu
             </Button>
           </div>
         )}
-
-        {/* Existing Parties */}
-        {subParties.map((party) => (
-          <div
-            key={party.id}
-            className="flex items-center justify-between p-4 rounded-lg bg-accent/50 hover:bg-accent transition-colors duration-200 group"
-          >
-            <div className="flex-1">
-              <p className="font-semibold text-foreground">{party.name}</p>
-              <p className="text-sm text-muted-foreground weight-display">
-                Today: {formatWeight(party.todayWeight)} kg
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                className="h-10 w-10 rounded-full bg-primary hover:bg-primary-hover p-0"
-                onClick={() => onAddEntry(party)}
-                aria-label={`Add entry for ${party.name}`}
-              >
-                <Plus className="h-5 w-5" />
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-10 w-10 rounded-full p-0 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => setDeleteConfirm(party)}
-                aria-label={`Delete ${party.name}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        ))}
       </div>
-
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Sub-Party</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete "{deleteConfirm?.name}"? This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => handleDelete(deleteConfirm?.id)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Card>
   );
 };

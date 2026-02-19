@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, LayoutDashboard, Calendar as CalendarIcon } from 'lucide-react';
 import { format } from 'date-fns';
@@ -9,7 +9,7 @@ import { StatBar } from '../components/StatBar';
 import { SubPartyList } from '../components/SubPartyList';
 import { EntriesTable } from '../components/EntriesTable';
 import { WeightEntryModal } from '../components/WeightEntryModal';
-import { getSupplierById, getEntriesByDate, saveEntry, updateWeightEntry, addSubParty, deleteSubParty } from '../utils/apiAdapter';
+import { getSupplierById, getEntriesByDate, saveEntry, updateWeightEntry, addSubParty, deleteSubParty, deleteWeightEntry } from '../utils/apiAdapter';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
@@ -24,6 +24,8 @@ const SupplierManagementPage = () => {
   const [selectedParty, setSelectedParty] = useState(null);
   const [editingEntry, setEditingEntry] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadingEntries, setLoadingEntries] = useState(false);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     loadSupplierData();
@@ -48,12 +50,26 @@ const SupplierManagementPage = () => {
   };
 
   const loadEntries = async () => {
+    // Cancel previous request if still pending
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
+    setLoadingEntries(true);
     try {
       const dateStr = format(selectedDate, 'yyyy-MM-dd');
+      console.log(`Loading entries for date: ${dateStr}, supplier: ${id}`);
       const data = await getEntriesByDate(id, dateStr);
-      setEntries(data);
+      setEntries(data || []);
     } catch (error) {
-      console.error('Failed to load entries:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Failed to load entries:', error);
+        toast.error('Failed to load entries');
+        setEntries([]);
+      }
+    } finally {
+      setLoadingEntries(false);
     }
   };
 
@@ -117,8 +133,77 @@ const SupplierManagementPage = () => {
     }
   };
 
-  const totalWeight = supplier?.subParties.reduce((sum, party) => sum + party.todayWeight, 0) || 0;
-  const activeParties = supplier?.subParties.filter(p => p.todayWeight > 0).length || 0;
+  const handleDeleteEntry = async (entryId) => {
+    try {
+      await deleteWeightEntry(entryId);
+      toast.success('Entry deleted successfully!');
+      await loadEntries();
+    } catch (error) {
+      console.error('Failed to delete entry:', error);
+      toast.error('Failed to delete entry');
+    }
+  };
+
+  // Fixed sub-party ordering by supplier
+  const SUB_PARTY_ORDER = {
+    'Joseph': ['RMS', 'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen'],
+    'Sadiq': ['RMS', 'Masthan'],
+    'Other Calculations': ['Anas', 'Anna city', 'B. Less', 'Sk', 'RMS', 'Saleem Bhai', 'Ramesh', 'School', '110', 'Daas', 'Mahendran']
+  };
+
+  const sortSubPartiesBySupplier = (parties) => {
+    const supplierName = supplier?.name;
+    // Case-insensitive lookup
+    const orderKey = Object.keys(SUB_PARTY_ORDER).find(
+      key => key.toLowerCase() === supplierName?.toLowerCase()
+    );
+    const order = orderKey ? SUB_PARTY_ORDER[orderKey] : [];
+    
+    if (order.length === 0) {
+      return parties; // No predefined order, return as-is
+    }
+    
+    return [...parties].sort((a, b) => {
+      const indexA = order.indexOf(a.name);
+      const indexB = order.indexOf(b.name);
+      
+      // Items in order come first (sorted by order)
+      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+      if (indexA !== -1) return -1; // a is in order, comes first
+      if (indexB !== -1) return 1;  // b is in order, comes first
+      
+      // Items not in order maintain alphabetical order
+      return a.name.localeCompare(b.name);
+    });
+  };
+
+  // Calculate stats from filtered entries for the selected date
+  const totalWeight = entries.reduce((sum, entry) => sum + (entry.liveWeight || 0), 0);
+  const activeParties = new Set(entries.map(e => e.partyName)).size;
+  
+  // Always show all sub-parties for this supplier, sorted by fixed order
+  // Parties with entries get green highlighting, others remain available for adding entries
+  const allSubParties = sortSubPartiesBySupplier(supplier?.subParties || []);
+
+  // Sort entries by the same party order
+  const sortedEntries = (() => {
+    const supplierName = supplier?.name;
+    const orderKey = Object.keys(SUB_PARTY_ORDER).find(
+      key => key.toLowerCase() === supplierName?.toLowerCase()
+    );
+    const order = orderKey ? SUB_PARTY_ORDER[orderKey] : [];
+    
+    if (order.length === 0) return entries;
+    
+    return [...entries].sort((a, b) => {
+      const indexA = order.indexOf(a.partyName);
+      const indexB = order.indexOf(b.partyName);
+      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+      if (indexA !== -1) return -1;
+      if (indexB !== -1) return 1;
+      return a.partyName.localeCompare(b.partyName);
+    });
+  })();
 
   if (loading) {
     return (
@@ -212,20 +297,33 @@ const SupplierManagementPage = () => {
           {/* Sub-Parties List - Left Side */}
           <div className="lg:col-span-4">
             <SubPartyList
-              subParties={supplier.subParties}
+              subParties={allSubParties}
+              allSubParties={supplier.subParties}
+              entries={entries}
               onAddEntry={handleAddEntry}
               onAddSubParty={handleAddSubParty}
               onDeleteSubParty={handleDeleteSubParty}
+              selectedDate={format(selectedDate, 'yyyy-MM-dd')}
             />
           </div>
 
           {/* Entries Table - Right Side */}
           <div className="lg:col-span-8">
-            <EntriesTable
-              entries={entries}
-              selectedDate={format(selectedDate, 'yyyy-MM-dd')}
-              onEditEntry={handleEditEntry}
-            />
+            {loadingEntries ? (
+              <div className="p-8 rounded-lg border bg-card flex items-center justify-center min-h-[300px]">
+                <div className="text-center space-y-2">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
+                  <p className="text-sm text-muted-foreground">Loading entries...</p>
+                </div>
+              </div>
+            ) : (
+              <EntriesTable
+                entries={sortedEntries}
+                selectedDate={format(selectedDate, 'yyyy-MM-dd')}
+                onEditEntry={handleEditEntry}
+                onDeleteEntry={handleDeleteEntry}
+              />
+            )}
           </div>
         </div>
       </div>
