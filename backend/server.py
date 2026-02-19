@@ -14,11 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import sentry_sdk
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from starlette.middleware.cors import CORSMiddleware
 
-from auth import get_current_user, get_optional_user
+from auth import create_access_token, get_current_user, get_optional_user
 from cache import cache_stats
 from firebase_client import initialize_firebase
 from models import (
@@ -79,6 +84,23 @@ from services import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# ---------------------------------------------------------------------------
+# Sentry — error tracking (no-op if SENTRY_DSN is empty)
+# ---------------------------------------------------------------------------
+_sentry_dsn = os.getenv("SENTRY_DSN", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        traces_sample_rate=0.2,
+        environment=os.getenv("ENVIRONMENT", "development"),
+    )
+
+# ---------------------------------------------------------------------------
+# Rate Limiter
+# ---------------------------------------------------------------------------
+_rate_per_min = os.getenv("RATE_LIMIT_PER_MINUTE", "60")
+limiter = Limiter(key_func=get_remote_address, default_limits=[f"{_rate_per_min}/minute"])
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -90,20 +112,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Chicken ERP API", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ---------------------------------------------------------------------------
-# CORS — allow all dev origins (localhost on any port)
+# CORS — origins from environment variable
 # ---------------------------------------------------------------------------
+_cors_origins = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:5173",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:5173",
-    ],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -127,6 +154,16 @@ async def root():
     return {"message": "Chicken ERP API is running"}
 
 
+@app.get("/api/health")
+async def health_check():
+    """Production health-check endpoint for Railway / uptime monitors."""
+    return {
+        "status": "healthy",
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @app.get("/api/cache-stats")
 async def get_cache_stats():
     """Return cache statistics for debugging."""
@@ -137,10 +174,13 @@ async def get_cache_stats():
 # AUTH
 # ===================================================================
 
-# Hardcoded users for development (no Firebase Auth needed)
+# Users loaded from environment (override defaults via .env)
+_ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@supplier.com")
+_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
 _HARDCODED_USERS = {
-    "admin@supplier.com": {
-        "password": "admin123",
+    _ADMIN_EMAIL: {
+        "password": _ADMIN_PASSWORD,
         "uid": "admin-001",
         "displayName": "Admin User",
         "role": "admin",
@@ -148,11 +188,12 @@ _HARDCODED_USERS = {
 }
 
 
-@app.post("/api/auth/login", response_model=UserResponse)
-async def login(body: LoginRequest):
+@app.post("/api/auth/login")
+@limiter.limit("5/minute")
+async def login(request: Request, body: LoginRequest):
     """
-    Hardcoded login — checks email/password against _HARDCODED_USERS.
-    Returns a simple static token for subsequent requests.
+    Login — validates credentials, returns a signed JWT token.
+    Rate-limited to 5 attempts per minute per IP.
     """
     user = _HARDCODED_USERS.get(body.email)
     if not user or user["password"] != body.password:
@@ -161,12 +202,23 @@ async def login(body: LoginRequest):
             detail="Invalid email or password",
         )
 
-    return UserResponse(
-        uid=user["uid"],
-        email=body.email,
-        displayName=user["displayName"],
-        role=user["role"],
+    # Issue a JWT token
+    token = create_access_token(
+        data={
+            "uid": user["uid"],
+            "email": body.email,
+            "name": user["displayName"],
+            "role": user["role"],
+        }
     )
+
+    return {
+        "uid": user["uid"],
+        "email": body.email,
+        "displayName": user["displayName"],
+        "role": user["role"],
+        "token": token,
+    }
 
 
 # ===================================================================
@@ -515,8 +567,9 @@ async def upsert_price_rate(request: Request, user: dict = Depends(get_current_u
     product = body.get("productTypeId", "chicken")
 
     # Try to find existing rate for this exact date
-    from backend.firebase_client import db
+    from firebase_client import get_firestore_client
     from google.cloud.firestore_v1.base_query import FieldFilter
+    db = get_firestore_client()
     existing = (
         db.collection("price_rates")
         .where(filter=FieldFilter("productTypeId", "==", product))

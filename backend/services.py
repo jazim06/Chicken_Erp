@@ -1018,6 +1018,18 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
             "calc": lambda w, r: round((w * 1.6) * (r + 5), 2),
             "label": "(Weight × 1.6) × (Paper rate + 5)",
         },
+        "Anas": {
+            "calc": lambda w, r: round(w * r, 2),
+            "label": "manual entry",
+        },
+        "B.Less": {
+            "calc": lambda w, r: round(w * r, 2),
+            "label": "manual entry",
+        },
+        "School": {
+            "calc": lambda w, r: round(w * r, 2),
+            "label": "(W × __)",
+        },
     }
 
     # Build a lookup from deduction entries {partyName (lowered): {partyName, amount}}
@@ -1062,12 +1074,15 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         weight = ded["amount"] if ded else 0.0
 
         formula_info = CUSTOM_FORMULAS.get(party_name)
-        if formula_info and weight > 0:
-            amount = formula_info["calc"](weight, rate)
-            formula_label = formula_info["label"]
+        # Always show formula label for known formulas, regardless of weight
+        formula_label = formula_info["label"] if formula_info else None
+        
+        if formula_info:
+            # Use custom formula if weight > 0
+            amount = formula_info["calc"](weight, rate) if weight > 0 else 0
         else:
+            # Standard weight × rate for unmapped parties
             amount = round(weight * rate, 2) if weight > 0 else 0
-            formula_label = None
 
         financial.append({
             "id": f"fin_{party_name.lower().replace(' ', '_')}",
@@ -1087,12 +1102,16 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
             weight = ded["amount"]
             party_name = ded["partyName"]
             formula_info = CUSTOM_FORMULAS.get(party_name)
-            if formula_info and weight > 0:
-                amount = formula_info["calc"](weight, rate)
-                formula_label = formula_info["label"]
+            # Always show formula label for known formulas, regardless of weight
+            formula_label = formula_info["label"] if formula_info else None
+            
+            if formula_info:
+                # Use custom formula if weight > 0
+                amount = formula_info["calc"](weight, rate) if weight > 0 else 0
             else:
+                # Standard weight × rate for unmapped parties
                 amount = round(weight * rate, 2) if weight > 0 else 0
-                formula_label = None
+            
             financial.append({
                 "id": f"fin_{key.replace(' ', '_')}",
                 "name": party_name,

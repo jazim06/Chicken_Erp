@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper: check that the caller is authenticated ──────────
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // ── Suppliers ────────────────────────────────────────────────
+    match /suppliers/{doc} {
+      allow read:  if true;       // public product listing
+      allow write: if isAuth();
+    }
+
+    // ── Weight entries ──────────────────────────────────────────
+    match /weight_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Financial entries ───────────────────────────────────────
+    match /financial_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Custom financial entries ────────────────────────────────
+    match /custom_financial_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Deduction entries ──────────────────────────────────────
+    match /deduction_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Section F entries ──────────────────────────────────────
+    match /section_f_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Price rates ────────────────────────────────────────────
+    match /price_rates/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Daily carryover ────────────────────────────────────────
+    match /daily_carryover/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── ATB / RMS entries ──────────────────────────────────────
+    match /atb_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+    match /rms_entries/{doc} {
+      allow read:  if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── Products ───────────────────────────────────────────────
+    match /products/{doc} {
+      allow read:  if true;
+      allow write: if isAuth();
+    }
+
+    // ── Deny everything else ───────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

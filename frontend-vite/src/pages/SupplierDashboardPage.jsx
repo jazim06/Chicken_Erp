@@ -138,7 +138,7 @@ const SupplierDashboardPage = () => {
       const prevDate = format(subDays(selectedDate, 1), 'yyyy-MM-dd');
       await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer dev-hardcoded-token' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
         body: JSON.stringify({ date: prevDate, balance: parseFloat(value) || 0 }),
       });
       await loadDashboard();
@@ -249,7 +249,7 @@ const SupplierDashboardPage = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer dev-hardcoded-token',
+          'Authorization': `Bearer ${localStorage.getItem('authToken') || ''}`,
         },
         body: JSON.stringify({ date: dateStr, deductions }),
       });
@@ -302,28 +302,28 @@ const SupplierDashboardPage = () => {
       // Suppliers section
       csv += 'SUPPLIERS\n';
       csv += 'Name,A (Load),B (Empty),C (Live)\n';
-      dashboardData?.suppliers?.forEach(supp => {
-        supp.subParties.forEach(sp => {
-          csv += `${sp.name},${sp.a || 0},${sp.b || 0},${sp.c || 0}\n`;
+      (dashboardData?.suppliers || []).forEach(supp => {
+        (supp.rows || []).forEach(sp => {
+          csv += `${sp.party || sp.name},${sp.a || 0},${sp.b || 0},${sp.c || 0}\n`;
         });
-        csv += `${supp.name} TOTAL,,,${supp.total || 0}\n`;
+        csv += `${supp.name} TOTAL,,,${supp.totalWeight || 0}\n`;
       });
 
       // Totals Overview
       csv += '\nTOTALS OVERVIEW\n';
       csv += 'Item,Weight (kg)\n';
-      dashboardData?.totalsOverview?.forEach(item => {
-        csv += `${item.label || item.name},${item.total || item.value || 0}\n`;
+      (dashboardData?.totalsOverview || []).forEach(item => {
+        csv += `${item.party || item.label || item.name},${item.total || item.value || 0}\n`;
       });
       csv += `SUBTOTAL,${calculateSubtotal()}\n`;
 
       // Financial Breakdown
       csv += '\nFINANCIAL BREAKDOWN\n';
       csv += 'Party,Weight (kg),Rate,Amount\n';
-      dashboardData?.financialBreakdown?.forEach(item => {
-        csv += `${item.name},${item.weight || 0},${item.rate || 0},${item.amount || 0}\n`;
+      (dashboardData?.financial || []).forEach(item => {
+        csv += `${item.name},${item.weight || 0},${item.ratePerKg || 0},${item.amount || 0}\n`;
       });
-      csv += `GRAND TOTAL,,,${dashboardData?.grandTotal || 0}\n`;
+      csv += `GRAND TOTAL,,,${dashboardData?.financialTotal || 0}\n`;
 
       // Deductions
       if (dashboardData?.deductions?.length > 0) {

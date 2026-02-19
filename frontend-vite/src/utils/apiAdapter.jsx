@@ -79,14 +79,14 @@ const api = async (path, method = 'GET', body = null) => {
 
 /**
  * Sign in with email + password (sent directly to backend).
- * Backend checks against hardcoded credentials.
+ * Backend returns a signed JWT token.
  */
 export const login = async (email, password) => {
-  const user = await api('/api/auth/login', 'POST', { email, password });
-  _authToken = 'dev-hardcoded-token';
+  const res = await api('/api/auth/login', 'POST', { email, password });
+  _authToken = res.token;
   localStorage.setItem('authToken', _authToken);
-  localStorage.setItem('user', JSON.stringify(user));
-  return { success: true, user };
+  localStorage.setItem('user', JSON.stringify(res));
+  return { success: true, user: res };
 };
 
 export const logout = () => {
