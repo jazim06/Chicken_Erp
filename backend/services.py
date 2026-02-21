@@ -714,7 +714,7 @@ def create_deduction_entry(data: dict) -> dict:
         "partyName": data["partyName"],
         "supplierId": data["supplierId"],
         "supplierName": data["supplierName"],
-        "amount": data["amount"],
+        "amount": round(data["amount"], 3),
         "date": data["date"],
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
@@ -741,7 +741,10 @@ def update_deduction_entry(entry_id: str, data: dict) -> dict:
     updates = {}
     for field in ("amount", "partyName", "partyId"):
         if field in data and data[field] is not None:
-            updates[field] = data[field]
+            val = data[field]
+            if field == "amount":
+                val = round(val, 3)
+            updates[field] = val
 
     if updates:
         update_document(DEDUCTION_ENTRIES, entry_id, updates)
@@ -758,11 +761,11 @@ def delete_deduction_entry(entry_id: str) -> None:
     cache_invalidate("dashboard:")
 
 
-def get_deduction_summary(date: str) -> dict:
+def get_deduction_summary(date: str, product_type: str = "chicken") -> dict:
     """
-    Lightweight summary of deductions + affected totals for a date.
-    Used after deduction CRUD operations to avoid a full dashboard rebuild.
-    Weight entries are served from the 180-second cache so this is very fast.
+    Summary of deductions + affected totals + financial breakdown for a date.
+    Used after deduction CRUD operations to refresh all dependent sections
+    without a full dashboard rebuild.
     """
     deductions = get_deduction_entries(date)
     total_deductions = round(sum(d.get("amount", 0) for d in deductions), 3)
@@ -774,11 +777,19 @@ def get_deduction_summary(date: str) -> dict:
     subtotal = round(available + carryover, 3)
     total_balance = round(subtotal - total_deductions, 3)
 
+    # Rebuild financial breakdown since deductions feed into it
+    rate = get_effective_rate(product_type, date)
+    financial, financial_total = _build_financial_breakdown(
+        deductions, rate, date, product_type
+    )
+
     return {
         "deductions": deductions,
         "totalDeductions": total_deductions,
         "subtotal": subtotal,
         "totalBalance": total_balance,
+        "financial": financial,
+        "financialTotal": financial_total,
     }
 
 
@@ -911,6 +922,123 @@ def save_daily_carryover(date: str, balance: float) -> None:
 
 
 # ===================================================================
+# FINANCIAL BREAKDOWN BUILDER
+# ===================================================================
+
+def _build_financial_breakdown(
+    deductions: list[dict],
+    rate: float,
+    date: str,
+    product_type: str = "chicken",
+) -> tuple[list[dict], float]:
+    """
+    Build the financial breakdown section from deduction entries,
+    RMS entry, and custom financial entries.
+
+    Each deduction party becomes a row: amount = weight × rate
+    (unless a custom formula applies).
+    Returns (list_of_rows, grand_total).
+    """
+    # Custom formulas: party_name → calc(weight, rate)
+    CUSTOM_FORMULAS = {
+        'Parveen': lambda w, r: round((r - 3) * w, 2),
+        'Anna city': lambda w, r: round((w * 1.5) * (r + 4), 2),
+        'Saleem Bhai': lambda w, r: round((w * 1.6) * (r + 5), 2),
+    }
+
+    rows: list[dict] = []
+    grand_total = 0.0
+
+    # 1. RMS entry (fixed amount, no weight)
+    rms_entry = get_rms_entry(date, product_type)
+    rms_amount = round(rms_entry["amount"], 2) if rms_entry else 0.0
+    rows.append({
+        "id": rms_entry["id"] if rms_entry else "rms_placeholder",
+        "name": "RMS",
+        "weight": 0,
+        "ratePerKg": rate,
+        "amount": rms_amount,
+        "formula": None,
+        "isRms": True,
+        "isCustom": False,
+    })
+    grand_total += rms_amount
+
+    # 2. Deduction-based rows (each deduction party → financial line)
+    # Use a set to track which DEFAULT_FINANCIAL_PARTIES we've already added
+    seen_names: set[str] = {"RMS"}  # RMS already added above
+
+    for ded in deductions:
+        name = ded.get("partyName", "Unknown")
+        weight = round(ded.get("amount", 0), 3)  # deduction 'amount' is the weight
+        formula_fn = CUSTOM_FORMULAS.get(name)
+        if formula_fn and weight > 0:
+            amount = formula_fn(weight, rate)
+            formula_label = _get_formula_label(name)
+        else:
+            amount = round(weight * rate, 2)
+            formula_label = None
+
+        rows.append({
+            "id": ded["id"],
+            "name": name,
+            "weight": weight,
+            "ratePerKg": rate,
+            "amount": amount,
+            "formula": formula_label,
+            "isRms": False,
+            "isCustom": False,
+        })
+        grand_total += amount
+        seen_names.add(name.lower())
+
+    # 3. Add remaining default parties that had no deduction entry (weight=0)
+    for party_name in DEFAULT_FINANCIAL_PARTIES:
+        if party_name.lower() in seen_names or party_name == "RMS":
+            continue
+        rows.append({
+            "id": f"default_{party_name}",
+            "name": party_name,
+            "weight": 0,
+            "ratePerKg": rate,
+            "amount": 0,
+            "formula": _get_formula_label(party_name) if party_name in CUSTOM_FORMULAS else None,
+            "isRms": False,
+            "isCustom": False,
+        })
+
+    # 4. Custom financial entries (user-added parties)
+    custom_entries = get_custom_financial_entries(date, product_type)
+    for ce in custom_entries:
+        name = ce.get("partyName", "Custom")
+        weight = round(ce.get("weight", 0), 3)
+        amount = round(ce.get("amount", 0), 2)
+        rows.append({
+            "id": ce["id"],
+            "name": name,
+            "weight": weight,
+            "ratePerKg": rate,
+            "amount": amount,
+            "formula": None,
+            "isRms": False,
+            "isCustom": True,
+        })
+        grand_total += amount
+
+    return rows, round(grand_total, 2)
+
+
+def _get_formula_label(name: str) -> str | None:
+    """Return a human-readable formula label for known custom-formula parties."""
+    formulas = {
+        'Parveen': '(PR-3) × W',
+        'Anna city': '(W×1.5) × (PR+4)',
+        'Saleem Bhai': '(W×1.6) × (PR+5)',
+    }
+    return formulas.get(name)
+
+
+# ===================================================================
 # OPTIMIZED HELPERS (avoid repeat queries)
 # ===================================================================
 
@@ -1024,161 +1152,22 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     # 3. Totals overview (uses pre-fetched carryover, fetches deductions)
     totals = _calculate_totals_overview_prefetched(date, supplier_totals, carryover)
 
-    # 4. Financial breakdown — built from deduction entries + RMS (not supplier subparties)
-    #    Each deduction party's weight × PR rate = amount
-    #    Custom formulas for specific parties:
-    #      Parveen:     (Paper rate - 3) × weight
-    #      Anna City:   (Weight × 1.5) × (Paper rate + 4)
-    #      Saleem Bhai: (Weight × 1.6) × (Paper rate + 5)
-    CUSTOM_FORMULAS = {
-        "Parveen": {
-            "calc": lambda w, r: round((r - 3) * w, 2),
-            "label": "(Paper rate - 3) × Weight",
-        },
-        "Anna city": {
-            "calc": lambda w, r: round((w * 1.5) * (r + 4), 2),
-            "label": "(Weight × 1.5) × (Paper rate + 4)",
-        },
-        "Saleem Bhai": {
-            "calc": lambda w, r: round((w * 1.6) * (r + 5), 2),
-            "label": "(Weight × 1.6) × (Paper rate + 5)",
-        },
-        "Anas": {
-            "calc": lambda w, r: round(w * r, 2),
-            "label": "manual entry",
-        },
-        "B.Less": {
-            "calc": lambda w, r: round(w * r, 2),
-            "label": "manual entry",
-        },
-        "School": {
-            "calc": lambda w, r: round(w * r, 2),
-            "label": "(W × __)",
-        },
-    }
-
-    # Build a lookup from deduction entries {partyName (lowered): {partyName, amount}}
-    deduction_lookup = {}
-    for d in totals.get("deductions", []):
-        deduction_lookup[d["partyName"].strip().lower()] = d
-
-    # Get RMS entry (client-entered amount in ₹ directly)
-    rms_entry = get_rms_entry(date, product_type)
-    rms_amount = rms_entry.get("amount", rms_entry.get("weight", 0)) if rms_entry else 0.0
+    # 4. Financial breakdown — built from deduction entries + Section F + RMS (reuse helper)
+    financial, financial_total = _build_financial_breakdown(
+        totals.get("deductions", []), rate, date, product_type
+    )
 
     # Get ATB entry (persisted rate)
     atb_entry = get_atb_entry(date, product_type)
     atb_rate = atb_entry["rate"] if atb_entry else 0.0
 
-    financial = []
-    financial_total = 0.0
-    seen_parties = set()  # track which deductions are already matched
+    # 5. Section F (other calculations) - now empty since merged into financial
+    #    Keep for backward compatibility but return empty list
+    section_f = []
+    section_f_total = 0.0
 
-    for party_name in DEFAULT_FINANCIAL_PARTIES:
-        key = party_name.strip().lower()
-        seen_parties.add(key)
-
-        if party_name == "RMS":
-            # RMS: client enters amount directly (no weight × rate calculation)
-            amount = round(rms_amount, 2)
-            financial.append({
-                "id": "fin_rms",
-                "name": "RMS",
-                "weight": None,
-                "ratePerKg": rate,
-                "amount": amount,
-                "formula": None,
-                "isRms": True,
-                "isCustom": False,
-            })
-            financial_total += amount
-            continue
-
-        # Other parties: match deduction entry by name (case-insensitive)
-        ded = deduction_lookup.get(key)
-        weight = ded["amount"] if ded else 0.0
-
-        formula_info = CUSTOM_FORMULAS.get(party_name)
-        # Always show formula label for known formulas, regardless of weight
-        formula_label = formula_info["label"] if formula_info else None
-        
-        if formula_info:
-            # Use custom formula if weight > 0
-            amount = formula_info["calc"](weight, rate) if weight > 0 else 0
-        else:
-            # Standard weight × rate for unmapped parties
-            amount = round(weight * rate, 2) if weight > 0 else 0
-
-        financial.append({
-            "id": f"fin_{party_name.lower().replace(' ', '_')}",
-            "name": party_name,
-            "weight": round(weight, 3),
-            "ratePerKg": rate,
-            "amount": amount,
-            "formula": formula_label,
-            "isRms": party_name == "RMS",
-            "isCustom": False,
-        })
-        financial_total += amount
-
-    # Auto-add deduction entries not in the default list
-    for key, ded in deduction_lookup.items():
-        if key not in seen_parties:
-            weight = ded["amount"]
-            party_name = ded["partyName"]
-            formula_info = CUSTOM_FORMULAS.get(party_name)
-            # Always show formula label for known formulas, regardless of weight
-            formula_label = formula_info["label"] if formula_info else None
-            
-            if formula_info:
-                # Use custom formula if weight > 0
-                amount = formula_info["calc"](weight, rate) if weight > 0 else 0
-            else:
-                # Standard weight × rate for unmapped parties
-                amount = round(weight * rate, 2) if weight > 0 else 0
-            
-            financial.append({
-                "id": f"fin_{key.replace(' ', '_')}",
-                "name": party_name,
-                "weight": round(weight, 3),
-                "ratePerKg": rate,
-                "amount": amount,
-                "formula": formula_label,
-                "isRms": False,
-                "isCustom": False,
-            })
-            financial_total += amount
-
-    # Auto-add custom financial entries (user-added parties)
-    custom_entries = get_custom_financial_entries(date, product_type)
-    for ce in custom_entries:
-        party_name = ce.get("partyName", "Unknown")
-        weight = ce.get("weight", 0)
-        amount = ce.get("amount", 0)
-        financial.append({
-            "id": ce["id"],
-            "name": party_name,
-            "weight": round(weight, 3) if weight else 0,
-            "ratePerKg": rate,
-            "amount": round(amount, 2),
-            "formula": None,
-            "isRms": False,
-            "isCustom": True,
-        })
-        financial_total += amount
-
-    financial_total = round(financial_total, 2)
-
-    # 5. Section F (other calculations)
-    sf_entries = get_section_f_entries(date)
-    section_f = [
-        {"id": e["id"], "name": e["name"], "amount": e["amount"], "weight": e.get("weight")}
-        for e in sf_entries
-    ]
-    section_f_total = round(sum(e["amount"] for e in sf_entries), 3)
-
-    # 6. Grand total
-    grand_total = round(financial_total + section_f_total, 2)
+    # 6. Grand total (only financial now, Section F is merged)
+    grand_total = round(financial_total, 2)
 
     # 7. Build totals overview entries for display (regular suppliers only)
     totals_display = []

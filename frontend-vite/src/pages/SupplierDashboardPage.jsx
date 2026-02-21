@@ -195,7 +195,8 @@ const SupplierDashboardPage = () => {
         const originalWeight = subParty?.liveWeight || 0;
 
         const amountValue = typeof ded.amount === 'number' ? ded.amount : 0;
-        const adjustmentValue = Math.abs(amountValue - originalWeight);
+        // Round to 3 decimals to avoid floating-point precision noise (e.g. 11.0000004)
+        const adjustmentValue = Math.round(Math.abs(amountValue - originalWeight) * 1000) / 1000;
         const adjustmentType = amountValue >= originalWeight ? '+' : '-';
         const adjustmentAmount = adjustmentValue > 0 ? adjustmentValue.toString() : '';
         
@@ -358,13 +359,15 @@ const SupplierDashboardPage = () => {
     if (id && !id.startsWith('new_')) {
       try {
         await deleteDeductionEntry(id);
-        // Refresh only deduction totals — no full dashboard reload
+        // Refresh deduction totals + financial breakdown
         const summary = await getDeductionSummary(dateStr);
         setDashboardData(prev => ({
           ...prev,
           deductions: summary.deductions,
           totalDeductions: summary.totalDeductions,
           totalBalance: summary.totalBalance,
+          financial: summary.financial,
+          financialTotal: summary.financialTotal,
         }));
       } catch (error) {
         toast.error('Failed to delete deduction');
@@ -381,7 +384,7 @@ const SupplierDashboardPage = () => {
     
     let saveAmount;
     if (useOriginal) {
-      saveAmount = deduction.originalWeight;
+      saveAmount = Math.round(deduction.originalWeight * 1000) / 1000;
     } else {
       if (!deduction.adjustmentAmount || parseFloat(deduction.adjustmentAmount) === 0) {
         toast.error('Please enter an adjustment weight');
@@ -389,7 +392,8 @@ const SupplierDashboardPage = () => {
       }
       const adj = parseFloat(deduction.adjustmentAmount);
       const finalWeight = deduction.originalWeight + (deduction.adjustmentType === '+' ? adj : -adj);
-      saveAmount = Math.max(0, finalWeight);
+      // Round to 3 decimals to avoid floating-point precision issues
+      saveAmount = Math.max(0, Math.round(finalWeight * 1000) / 1000);
     }
     setSelectedDeductions(prev => 
       prev.map(d => d.id === id ? { ...d, isSaving: true } : d)
@@ -411,13 +415,15 @@ const SupplierDashboardPage = () => {
           amount: saveAmount
         });
       }
-      // Refresh only deduction totals — no full dashboard reload
+      // Refresh deduction totals + financial breakdown
       const summary = await getDeductionSummary(dateStr);
       setDashboardData(prev => ({
         ...prev,
         deductions: summary.deductions,
         totalDeductions: summary.totalDeductions,
         totalBalance: summary.totalBalance,
+        financial: summary.financial,
+        financialTotal: summary.financialTotal,
       }));
       toast.success('Deduction saved successfully');
     } catch (error) {
