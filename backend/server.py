@@ -60,6 +60,7 @@ from services import (
     get_all_suppliers,
     get_dashboard,
     get_deduction_entries,
+    get_deduction_summary,
     get_effective_rate,
     get_financial_entries,
     get_section_f_entries,
@@ -598,6 +599,12 @@ async def upsert_price_rate(request: Request, user: dict = Depends(get_current_u
 @app.get("/api/deduction-entries")
 async def list_deduction_entries_route(date: str = Query(...)):
     return get_deduction_entries(date)
+
+
+@app.get("/api/deduction-summary")
+async def get_deduction_summary_route(date: str = Query(...)):
+    """Lightweight: deductions + totalDeductions/totalBalance for a date."""
+    return get_deduction_summary(date)
 
 
 @app.post("/api/deduction-entries", status_code=201)

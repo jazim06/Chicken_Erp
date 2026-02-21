@@ -298,6 +298,9 @@ export const deleteDashboardEntry = async (type, id) => {
 export const getDeductionEntries = (date) =>
   api(`/api/deduction-entries?date=${date}`);
 
+export const getDeductionSummary = (date) =>
+  api(`/api/deduction-summary?date=${date}`);
+
 // ===================================================================
 // RMS ENTRIES
 // ===================================================================

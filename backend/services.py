@@ -710,6 +710,7 @@ def delete_custom_financial_entry(entry_id: str) -> None:
 def create_deduction_entry(data: dict) -> dict:
     """Create a deduction entry for a sub-party on a given date."""
     doc = {
+        "partyId": data.get("partyId"),
         "partyName": data["partyName"],
         "supplierId": data["supplierId"],
         "supplierName": data["supplierName"],
@@ -738,7 +739,7 @@ def update_deduction_entry(entry_id: str, data: dict) -> dict:
         raise LookupError(f"Deduction entry {entry_id} not found")
 
     updates = {}
-    for field in ("amount", "partyName"):
+    for field in ("amount", "partyName", "partyId"):
         if field in data and data[field] is not None:
             updates[field] = data[field]
 
@@ -755,6 +756,30 @@ def delete_deduction_entry(entry_id: str) -> None:
         raise LookupError(f"Deduction entry {entry_id} not found")
     delete_document(DEDUCTION_ENTRIES, entry_id)
     cache_invalidate("dashboard:")
+
+
+def get_deduction_summary(date: str) -> dict:
+    """
+    Lightweight summary of deductions + affected totals for a date.
+    Used after deduction CRUD operations to avoid a full dashboard rebuild.
+    Weight entries are served from the 180-second cache so this is very fast.
+    """
+    deductions = get_deduction_entries(date)
+    total_deductions = round(sum(d.get("amount", 0) for d in deductions), 3)
+
+    # Subtotal = sum of all live weights (from cache) + yesterday's carryover
+    weight_entries = get_weight_entries(date)
+    available = round(sum(e.get("liveWeight", 0) for e in weight_entries), 3)
+    carryover = _get_previous_day_carryover(date)
+    subtotal = round(available + carryover, 3)
+    total_balance = round(subtotal - total_deductions, 3)
+
+    return {
+        "deductions": deductions,
+        "totalDeductions": total_deductions,
+        "subtotal": subtotal,
+        "totalBalance": total_balance,
+    }
 
 
 # ===================================================================

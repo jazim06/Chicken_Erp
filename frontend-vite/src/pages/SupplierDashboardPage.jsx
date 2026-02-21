@@ -28,6 +28,7 @@ import {
   createDeductionEntry,
   updateDeductionEntry,
   deleteDeductionEntry,
+  getDeductionSummary,
   updatePriceRate,
   updateRMSEntry,
   updateATBEntry,
@@ -41,6 +42,20 @@ import {
 } from '../utils/apiAdapter';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
+
+// Preferred dropdown order for deduction parties
+const DEDUCTION_PARTY_ORDER = [
+  'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
+  'Masthan', 'Al Ayaan', 'MBB', 'F', 'Anas', 'Iruppu'
+];
+
+const getDeductionSortIndex = (name) => {
+  const normalized = name.toLowerCase().replace(/[.\s]/g, '');
+  const idx = DEDUCTION_PARTY_ORDER.findIndex(n => 
+    n.toLowerCase().replace(/[.\s]/g, '') === normalized
+  );
+  return idx === -1 ? DEDUCTION_PARTY_ORDER.length : idx;
+};
 
 const SupplierDashboardPage = () => {
   const { id } = useParams();
@@ -64,6 +79,7 @@ const SupplierDashboardPage = () => {
   const [subParties, setSubParties] = useState([]); // All available sub-parties from suppliers
   const [selectedDeductions, setSelectedDeductions] = useState([]); // Array of deduction entries
   const [selectedPartyDropdown, setSelectedPartyDropdown] = useState(''); // Dropdown selection
+  const [customPartyName, setCustomPartyName] = useState(''); // Custom party name input
   const [yesterdayStock, setYesterdayStock] = useState('');
   const [savingStock, setSavingStock] = useState(false);
 
@@ -171,12 +187,17 @@ const SupplierDashboardPage = () => {
     if (dashboardData?.deductions) {
       const deductionsArray = dashboardData.deductions.map(ded => {
         // Find original weight from sub-parties
-        const subParty = subParties.find(sp => sp.id === ded.partyId);
+        const subParty = subParties.find(sp => sp.id === ded.partyId) ||
+          subParties.find(sp =>
+            sp.name?.toLowerCase() === ded.partyName?.toLowerCase() &&
+            sp.supplierId === ded.supplierId
+          );
         const originalWeight = subParty?.liveWeight || 0;
-        
-        // Determine adjustment type based on sign
-        const adjustmentType = ded.amount >= 0 ? '+' : '-';
-        const adjustmentAmount = Math.abs(ded.amount);
+
+        const amountValue = typeof ded.amount === 'number' ? ded.amount : 0;
+        const adjustmentValue = Math.abs(amountValue - originalWeight);
+        const adjustmentType = amountValue >= originalWeight ? '+' : '-';
+        const adjustmentAmount = adjustmentValue > 0 ? adjustmentValue.toString() : '';
         
         return {
           id: ded.id,
@@ -301,6 +322,32 @@ const SupplierDashboardPage = () => {
     setSelectedPartyDropdown('');
   };
 
+  const handleAddCustomParty = () => {
+    const name = customPartyName.trim();
+    if (!name) {
+      toast.error('Please enter a party name');
+      return;
+    }
+    if (selectedDeductions.some(d => d.partyName.toLowerCase() === name.toLowerCase())) {
+      toast.error('This party is already in the deductions list');
+      return;
+    }
+    const newEntry = {
+      id: `new_${Date.now()}`,
+      partyId: `custom_${name}`,
+      partyName: name,
+      supplierId: id,
+      supplierName: dashboardData?.supplierName || '',
+      originalWeight: 0,
+      adjustmentAmount: '',
+      adjustmentType: '+',
+      isSaved: false,
+      isSaving: false
+    };
+    setSelectedDeductions(prev => [...prev, newEntry]);
+    setCustomPartyName('');
+  };
+
   const handleUpdateDeduction = (id, field, value) => {
     setSelectedDeductions(prev => 
       prev.map(d => d.id === id ? { ...d, [field]: value } : d)
@@ -311,6 +358,14 @@ const SupplierDashboardPage = () => {
     if (id && !id.startsWith('new_')) {
       try {
         await deleteDeductionEntry(id);
+        // Refresh only deduction totals — no full dashboard reload
+        const summary = await getDeductionSummary(dateStr);
+        setDashboardData(prev => ({
+          ...prev,
+          deductions: summary.deductions,
+          totalDeductions: summary.totalDeductions,
+          totalBalance: summary.totalBalance,
+        }));
       } catch (error) {
         toast.error('Failed to delete deduction');
         return;
@@ -332,9 +387,9 @@ const SupplierDashboardPage = () => {
         toast.error('Please enter an adjustment weight');
         return;
       }
-      saveAmount = deduction.adjustmentType === '+' 
-        ? parseFloat(deduction.adjustmentAmount)
-        : -parseFloat(deduction.adjustmentAmount);
+      const adj = parseFloat(deduction.adjustmentAmount);
+      const finalWeight = deduction.originalWeight + (deduction.adjustmentType === '+' ? adj : -adj);
+      saveAmount = Math.max(0, finalWeight);
     }
     setSelectedDeductions(prev => 
       prev.map(d => d.id === id ? { ...d, isSaving: true } : d)
@@ -352,10 +407,18 @@ const SupplierDashboardPage = () => {
       } else {
         await updateDeductionEntry(deduction.id, {
           partyName: deduction.partyName,
+          partyId: deduction.partyId,
           amount: saveAmount
         });
       }
-      await loadDashboard();
+      // Refresh only deduction totals — no full dashboard reload
+      const summary = await getDeductionSummary(dateStr);
+      setDashboardData(prev => ({
+        ...prev,
+        deductions: summary.deductions,
+        totalDeductions: summary.totalDeductions,
+        totalBalance: summary.totalBalance,
+      }));
       toast.success('Deduction saved successfully');
     } catch (error) {
       console.error('Failed to save deduction:', error);
@@ -868,7 +931,7 @@ const SupplierDashboardPage = () => {
                   <p className="text-xs text-gray-500 mb-3">Select a party to track weight overages (+) or shortages (-)</p>
                   
                   {/* Dropdown Selector */}
-                  <div className="flex gap-2 mb-4">
+                  <div className="flex gap-2 mb-2">
                     <Select value={selectedPartyDropdown} onValueChange={setSelectedPartyDropdown}>
                       <SelectTrigger className="flex-1 h-9 text-sm">
                         <SelectValue placeholder="Select a party..." />
@@ -876,6 +939,7 @@ const SupplierDashboardPage = () => {
                       <SelectContent className="max-h-48">
                         {subParties
                           .filter(sp => !selectedDeductions.some(d => d.partyId === sp.id))
+                          .sort((a, b) => getDeductionSortIndex(a.name) - getDeductionSortIndex(b.name))
                           .map(party => (
                           <SelectItem key={party.id} value={party.id}>
                             <span className="text-sm">
@@ -889,6 +953,24 @@ const SupplierDashboardPage = () => {
                       size="sm"
                       onClick={handleAddDeductionParty}
                       className="h-9 px-3 bg-red-600 hover:bg-red-700 text-white"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {/* Custom Name Input */}
+                  <div className="flex gap-2 mb-4">
+                    <Input
+                      value={customPartyName}
+                      onChange={(e) => setCustomPartyName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddCustomParty()}
+                      placeholder="Add custom name..."
+                      className="flex-1 h-9 text-sm"
+                    />
+                    <Button 
+                      size="sm"
+                      onClick={handleAddCustomParty}
+                      variant="outline"
+                      className="h-9 px-3 border-red-300 text-red-600 hover:bg-red-50"
                     >
                       <Plus className="h-4 w-4" />
                     </Button>
