@@ -44,7 +44,7 @@ USERS = "users"
 # Default financial breakdown party list (in display order)
 DEFAULT_FINANCIAL_PARTIES = [
     'RMS', 'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
-    'Masthan', 'MBB', 'Al Ayaan', 'Anas', 'Anna city',
+    'Masthan', 'Al Ayaan', 'MBB', 'F', 'Anas', 'Anna city',
     'B.Less', 'Saleem Bhai', 'Ramesh', 'School', '110',
     'Daas', 'Mahendran', 'Iruppu',
 ]
@@ -814,9 +814,23 @@ def get_deduction_summary(date: str, product_type: str = "chicken") -> dict:
     deductions = get_deduction_entries(date)
     total_deductions = round(sum(d.get("amount", 0) for d in deductions), 3)
 
-    # Subtotal = sum of all live weights (from cache) + yesterday's carryover
+    # Subtotal must match get_dashboard logic: only non-OTHER-CALCULATION
+    # supplier weights + yesterday's carryover
     weight_entries = get_weight_entries(date)
-    available = round(sum(e.get("liveWeight", 0) for e in weight_entries), 3)
+    supplier_names_map = _get_supplier_names()
+    other_calc_sids = {
+        sid for sid, name in supplier_names_map.items()
+        if name == "OTHER CALCULATION"
+    }
+    # Exclude OTHER CALCULATION suppliers from the subtotal
+    available = round(
+        sum(
+            e.get("liveWeight", 0)
+            for e in weight_entries
+            if e["supplierId"] not in other_calc_sids
+        ),
+        3,
+    )
     carryover = _get_previous_day_carryover(date)
     subtotal = round(available + carryover, 3)
     total_balance = round(subtotal - total_deductions, 3)

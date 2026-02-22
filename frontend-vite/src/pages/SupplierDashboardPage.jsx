@@ -46,7 +46,7 @@ import { cn } from '../lib/utils';
 // Preferred dropdown order for deduction parties
 const DEDUCTION_PARTY_ORDER = [
   'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
-  'Masthan', 'Al Ayaan', 'MBB', 'F', 'Anas', 'Iruppu'
+  'Masthan', 'Al Ayaan', 'MBB', 'Anas', 'F', 'Iruppu'
 ];
 
 const getDeductionSortIndex = (name) => {
@@ -186,13 +186,28 @@ const SupplierDashboardPage = () => {
   useEffect(() => {
     if (dashboardData?.deductions) {
       const deductionsArray = dashboardData.deductions.map(ded => {
-        // Find original weight from sub-parties
+        // Find original weight from sub-parties (JOSEPH/SADIQ/OTHER CALCULATION)
         const subParty = subParties.find(sp => sp.id === ded.partyId) ||
           subParties.find(sp =>
             sp.name?.toLowerCase() === ded.partyName?.toLowerCase() &&
             sp.supplierId === ded.supplierId
+          ) ||
+          // Also match by name only (for parties whose supplierId on the deduction
+          // doesn't match the supplier that actually has the weight data)
+          subParties.find(sp =>
+            sp.name?.toLowerCase() === ded.partyName?.toLowerCase()
           );
-        const originalWeight = subParty?.liveWeight || 0;
+        let originalWeight = subParty?.liveWeight || 0;
+
+        // If still 0, try Other Calculations items (Section F / OTHER CALCULATION)
+        if (originalWeight === 0 && dashboardData?.otherCalculations?.items) {
+          const otherItem = dashboardData.otherCalculations.items.find(
+            item => item.name?.toLowerCase() === ded.partyName?.toLowerCase()
+          );
+          if (otherItem) {
+            originalWeight = otherItem.value || 0;
+          }
+        }
 
         const amountValue = typeof ded.amount === 'number' ? ded.amount : 0;
         // Round to 3 decimals to avoid floating-point precision noise (e.g. 11.0000004)
@@ -213,6 +228,8 @@ const SupplierDashboardPage = () => {
           isSaving: false
         };
       });
+      // Sort deductions in the preferred display order
+      deductionsArray.sort((a, b) => getDeductionSortIndex(a.partyName) - getDeductionSortIndex(b.partyName));
       setSelectedDeductions(deductionsArray);
     }
   }, [dashboardData?.deductions, subParties]);
@@ -359,12 +376,13 @@ const SupplierDashboardPage = () => {
     if (id && !id.startsWith('new_')) {
       try {
         await deleteDeductionEntry(id);
-        // Refresh deduction totals + financial breakdown
+        // Refresh deduction totals + financial breakdown + subtotal/balance
         const summary = await getDeductionSummary(dateStr);
         setDashboardData(prev => ({
           ...prev,
           deductions: summary.deductions,
           totalDeductions: summary.totalDeductions,
+          subtotal: summary.subtotal,
           totalBalance: summary.totalBalance,
           financial: summary.financial,
           financialTotal: summary.financialTotal,
@@ -415,12 +433,13 @@ const SupplierDashboardPage = () => {
           amount: saveAmount
         });
       }
-      // Refresh deduction totals + financial breakdown
+      // Refresh deduction totals + financial breakdown + subtotal/balance
       const summary = await getDeductionSummary(dateStr);
       setDashboardData(prev => ({
         ...prev,
         deductions: summary.deductions,
         totalDeductions: summary.totalDeductions,
+        subtotal: summary.subtotal,
         totalBalance: summary.totalBalance,
         financial: summary.financial,
         financialTotal: summary.financialTotal,
