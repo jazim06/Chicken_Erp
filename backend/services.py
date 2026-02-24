@@ -35,19 +35,17 @@ DEDUCTION_ENTRIES = "deduction_entries"
 RMS_ENTRIES = "rms_entries"
 ATB_ENTRIES = "atb_entries"
 CUSTOM_FINANCIAL_ENTRIES = "custom_financial_entries"
+SCHOOL_RATE_ENTRIES = "school_rate_entries"
 PRICE_RATES = "price_rates"
 SUPPLIERS = "suppliers"
 SUB_PARTIES = "sub_parties"
 PRODUCTS = "products"
 USERS = "users"
 
-# Default financial breakdown party list (in display order)
-DEFAULT_FINANCIAL_PARTIES = [
-    'RMS', 'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen',
-    'Masthan', 'Al Ayaan', 'MBB', 'F', 'Anas', 'Anna city',
-    'B.Less', 'Saleem Bhai', 'Ramesh', 'School', '110',
-    'Daas', 'Mahendran', 'Iruppu',
-]
+# NOTE: DEFAULT_FINANCIAL_PARTIES removed.  The financial breakdown now
+# derives its party list dynamically from the Other Calculations section
+# (other_calc_items) so that ordering matches and parties with no data are
+# excluded (prevents deleted parties from reappearing on refresh).
 
 # ---------------------------------------------------------------------------
 # Fallback seed data (when Firestore is empty)
@@ -637,6 +635,56 @@ def save_atb_entry(date: str, product_type: str, rate: float) -> dict:
 
 
 # ===================================================================
+# SCHOOL CUSTOM RATE CRUD
+# ===================================================================
+
+def _get_school_custom_rate(date: str, product_type: str = "chicken") -> dict | None:
+    """Get the School custom rate entry for a date."""
+    cache_key = f"school_rate:{product_type}:{date}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    entries = list_documents(
+        SCHOOL_RATE_ENTRIES,
+        filters=[("date", "==", date), ("productType", "==", product_type)],
+    )
+    result = entries[0] if entries else None
+    cache_set(cache_key, result, ttl_seconds=120)
+    return result
+
+
+def save_school_custom_rate(date: str, product_type: str, custom_rate: float) -> dict:
+    """Create or update the School custom rate for a date."""
+    db = get_firestore_client()
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    existing = list(
+        db.collection(SCHOOL_RATE_ENTRIES)
+        .where(filter=FieldFilter("date", "==", date))
+        .where(filter=FieldFilter("productType", "==", product_type))
+        .limit(1)
+        .stream()
+    )
+    doc = next(iter(existing), None)
+    if doc:
+        db.collection(SCHOOL_RATE_ENTRIES).document(doc.id).update({
+            "rate": custom_rate,
+        })
+        result = {"id": doc.id, "date": date, "productType": product_type, "rate": custom_rate}
+    else:
+        doc_data = {
+            "date": date,
+            "productType": product_type,
+            "rate": custom_rate,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+        doc_id = create_document(SCHOOL_RATE_ENTRIES, doc_data)
+        result = {"id": doc_id, **doc_data}
+    cache_invalidate("school_rate:")
+    cache_invalidate("dashboard:")
+    return result
+
+
+# ===================================================================
 # CUSTOM FINANCIAL ENTRIES CRUD
 # ===================================================================
 
@@ -763,30 +811,21 @@ def delete_deduction_entry(entry_id: str) -> None:
 
 def _get_other_calc_items(date: str, weight_entries: list[dict] | None = None) -> list[dict]:
     """
-    Build the other-calc items list (Section F entries + OTHER CALCULATION
-    supplier weight entries) so financial breakdown can pull weights for
-    non-deduction parties.
+    Build the other-calc items list: OTHER CALCULATION supplier weight
+    entries first, then Section F (manually-added) entries last, so that
+    newly-added Section F entries always appear at the end.
     """
     supplier_names = _get_supplier_names()
 
-    # Section F entries
-    sf_entries = get_section_f_entries(date)
-    items = [
-        {"id": e["id"], "name": e["name"], "value": e["amount"]}
-        for e in sf_entries
-    ]
-
-    # OTHER CALCULATION supplier entries
+    # OTHER CALCULATION supplier entries — come first
     if weight_entries is None:
         weight_entries = get_weight_entries(date)
 
-    # Find the OTHER CALCULATION supplier id(s)
     other_calc_sids = [
         sid for sid, name in supplier_names.items()
         if name == "OTHER CALCULATION"
     ]
 
-    # Group weight entries by partyName for OTHER CALCULATION suppliers
     party_totals: dict[str, float] = {}
     party_ids: dict[str, str] = {}
     for e in weight_entries:
@@ -795,12 +834,26 @@ def _get_other_calc_items(date: str, weight_entries: list[dict] | None = None) -
             party_totals[pname] = party_totals.get(pname, 0) + e.get("liveWeight", 0)
             party_ids[pname] = e.get("partyId", "")
 
+    items: list[dict] = []
+    seen_names: set[str] = set()
     for pname, total_weight in party_totals.items():
         items.append({
             "id": party_ids.get(pname, pname),
             "name": pname,
             "value": round(total_weight, 3),
         })
+        seen_names.add(pname.lower())
+
+    # Section F entries — appended after, so manually-added entries appear last
+    sf_entries = get_section_f_entries(date)
+    for e in sf_entries:
+        if e["name"].lower() not in seen_names:
+            items.append({
+                "id": e["id"],
+                "name": e["name"],
+                "value": e["amount"],
+            })
+            seen_names.add(e["name"].lower())
 
     return items
 
@@ -839,10 +892,23 @@ def get_deduction_summary(date: str, product_type: str = "chicken") -> dict:
     # so financial breakdown can pull weights for non-deduction parties
     other_calc_items = _get_other_calc_items(date, weight_entries)
 
+    # Build supplier sub-parties for financial breakdown
+    supplier_sub_parties = []
+    seen_sp = set()
+    for e in weight_entries:
+        if e["supplierId"] not in other_calc_sids:
+            pname = e.get("partyName", e.get("partyId", ""))
+            if pname and pname.lower() not in seen_sp:
+                seen_sp.add(pname.lower())
+                supplier_sub_parties.append({"name": pname})
+
     # Rebuild financial breakdown since deductions feed into it
     rate = get_effective_rate(product_type, date)
     financial, financial_total = _build_financial_breakdown(
-        deductions, rate, date, product_type, other_calc_items=other_calc_items
+        deductions, rate, date, product_type,
+        other_calc_items=other_calc_items,
+        supplier_parties=supplier_sub_parties,
+        carryover=carryover,
     )
 
     return {
@@ -852,6 +918,201 @@ def get_deduction_summary(date: str, product_type: str = "chicken") -> dict:
         "totalBalance": total_balance,
         "financial": financial,
         "financialTotal": financial_total,
+    }
+
+
+# ===================================================================
+# ANALYTICS  (revenue / weight trends, supplier breakdown)
+# ===================================================================
+
+def get_analytics(
+    start_date: str,
+    end_date: str,
+    product_type: str = "chicken",
+) -> dict:
+    """Aggregate weight-entry data between *start_date* and *end_date* inclusive.
+
+    Returns daily series, weekly buckets, monthly buckets, and
+    breakdowns by supplier / party suitable for charting.
+    """
+    cache_key = f"analytics:{product_type}:{start_date}:{end_date}"
+    cached = cache_get(cache_key)
+    if cached:
+        return cached
+
+    # --- fetch all weight entries in the window -----------------------
+    db = get_firestore_client()
+    ref = db.collection(WEIGHT_ENTRIES)
+    query = ref.where("date", ">=", start_date).where("date", "<=", end_date)
+    docs = query.stream()
+    entries = []
+    for d in docs:
+        rec = d.to_dict()
+        if rec.get("isDeleted"):
+            continue
+        rec["id"] = d.id
+        entries.append(rec)
+
+    # --- supplier name lookup -----------------------------------------
+    supplier_names = _get_supplier_names()
+
+    # --- group entries by date for per-date grand total ---------------
+    entries_by_date: dict[str, list[dict]] = {}
+    for e in entries:
+        entries_by_date.setdefault(e.get("date", ""), []).append(e)
+
+    # --- fetch all deduction entries in the window --------------------
+    ded_ref = db.collection(DEDUCTION_ENTRIES)
+    ded_query = ded_ref.where("date", ">=", start_date).where("date", "<=", end_date)
+    ded_docs = ded_query.stream()
+    deductions_by_date: dict[str, list[dict]] = {}
+    for dd in ded_docs:
+        drec = dd.to_dict()
+        if drec.get("isDeleted"):
+            continue
+        drec["id"] = dd.id
+        ddt = drec.get("date", "")
+        deductions_by_date.setdefault(ddt, []).append(drec)
+
+    # --- compute Grand Total per day (same as dashboard) --------------
+    daily_revenue: dict[str, float] = {}
+    for dt in set(list(entries_by_date.keys()) + list(deductions_by_date.keys())):
+        date_deductions = deductions_by_date.get(dt, [])
+        rate = get_effective_rate(product_type, dt)
+        date_entries = entries_by_date.get(dt, [])
+        other_calc_items = _get_other_calc_items(dt, date_entries)
+        dt_carryover = _get_previous_day_carryover(dt)
+        _, grand_total = _build_financial_breakdown(
+            date_deductions, rate, dt, product_type,
+            other_calc_items=other_calc_items,
+            carryover=dt_carryover,
+        )
+        daily_revenue[dt] = round(grand_total, 2)
+
+    # --- daily aggregation --------------------------------------------
+    daily: dict[str, dict] = {}
+    supplier_totals: dict[str, float] = {}
+    party_totals: dict[str, float] = {}
+
+    for e in entries:
+        dt = e.get("date", "")
+        w = round(float(e.get("liveWeight", 0)), 3)
+        sid = e.get("supplierId", "unknown")
+        party = e.get("partyName", "Unknown")
+
+        if dt not in daily:
+            daily[dt] = {"date": dt, "weight": 0.0, "count": 0, "revenue": 0.0}
+        daily[dt]["weight"] = round(daily[dt]["weight"] + w, 3)
+        daily[dt]["count"] += 1
+
+        sname = supplier_names.get(sid, sid)
+        if sname.upper() == "OTHER CALCULATION":
+            continue  # skip virtual supplier
+        supplier_totals[sname] = round(supplier_totals.get(sname, 0) + w, 3)
+        party_totals[party] = round(party_totals.get(party, 0) + w, 3)
+
+    # --- assign actual revenue per day from financial_entries ---------
+    for dt, bucket in daily.items():
+        bucket["revenue"] = daily_revenue.get(dt, 0.0)
+
+    daily_series = sorted(daily.values(), key=lambda x: x["date"])
+
+    # --- weekly aggregation -------------------------------------------
+    weekly: dict[str, dict] = {}
+    for ds in daily_series:
+        dt_obj = datetime.strptime(ds["date"], "%Y-%m-%d")
+        week_start = (dt_obj - timedelta(days=dt_obj.weekday())).strftime("%Y-%m-%d")
+        if week_start not in weekly:
+            weekly[week_start] = {"week": week_start, "weight": 0.0, "revenue": 0.0, "count": 0}
+        weekly[week_start]["weight"] = round(weekly[week_start]["weight"] + ds["weight"], 3)
+        weekly[week_start]["revenue"] = round(weekly[week_start]["revenue"] + ds["revenue"], 2)
+        weekly[week_start]["count"] += ds["count"]
+    weekly_series = sorted(weekly.values(), key=lambda x: x["week"])
+
+    # --- monthly aggregation ------------------------------------------
+    monthly: dict[str, dict] = {}
+    for ds in daily_series:
+        month_key = ds["date"][:7]  # YYYY-MM
+        if month_key not in monthly:
+            monthly[month_key] = {"month": month_key, "weight": 0.0, "revenue": 0.0, "count": 0}
+        monthly[month_key]["weight"] = round(monthly[month_key]["weight"] + ds["weight"], 3)
+        monthly[month_key]["revenue"] = round(monthly[month_key]["revenue"] + ds["revenue"], 2)
+        monthly[month_key]["count"] += ds["count"]
+    monthly_series = sorted(monthly.values(), key=lambda x: x["month"])
+
+    # --- top suppliers & parties (sorted desc) ------------------------
+    supplier_breakdown = sorted(
+        [{"name": k, "weight": v} for k, v in supplier_totals.items()],
+        key=lambda x: x["weight"],
+        reverse=True,
+    )
+    party_breakdown = sorted(
+        [{"name": k, "weight": v} for k, v in party_totals.items()],
+        key=lambda x: x["weight"],
+        reverse=True,
+    )
+
+    # --- totals -------------------------------------------------------
+    total_weight = round(sum(d["weight"] for d in daily_series), 3)
+    total_revenue = round(sum(d["revenue"] for d in daily_series), 2)
+    total_entries = sum(d["count"] for d in daily_series)
+
+    result = {
+        "totalWeight": total_weight,
+        "totalRevenue": total_revenue,
+        "totalEntries": total_entries,
+        "totalSuppliers": len(supplier_totals),
+        "daily": daily_series,
+        "weekly": weekly_series,
+        "monthly": monthly_series,
+        "supplierBreakdown": supplier_breakdown,
+        "partyBreakdown": party_breakdown,
+    }
+
+    cache_set(cache_key, result, ttl_seconds=60)
+    return result
+
+
+# ===================================================================
+# ENTRY-DATES (for log-history calendar / streak)
+# ===================================================================
+
+def get_entry_dates(
+    start_date: str,
+    end_date: str,
+    supplier_id: str | None = None,
+) -> list[str]:
+    """Return distinct YYYY-MM-DD strings that have weight_entries in [start_date, end_date].
+
+    Optionally filtered by a single supplier.
+    """
+    db = get_firestore_client()
+    col = db.collection(WEIGHT_ENTRIES)
+    q = col.where("date", ">=", start_date).where("date", "<=", end_date)
+    if supplier_id:
+        q = q.where("supplierId", "==", supplier_id)
+    docs = q.stream()
+    dates = set()
+    for doc in docs:
+        d = doc.to_dict()
+        if not d.get("isDeleted"):
+            dates.add(d["date"])
+    return sorted(dates)
+
+
+def get_entry_date_details(date: str) -> dict:
+    """Return a brief summary for a single date: supplier count + total weight."""
+    entries = get_weight_entries(date)
+    suppliers = set()
+    total_weight = 0.0
+    for e in entries:
+        suppliers.add(e.get("supplierId", ""))
+        total_weight += e.get("liveWeight", 0)
+    return {
+        "date": date,
+        "supplierCount": len(suppliers),
+        "totalWeight": round(total_weight, 3),
+        "entryCount": len(entries),
     }
 
 
@@ -993,6 +1254,8 @@ def _build_financial_breakdown(
     date: str,
     product_type: str = "chicken",
     other_calc_items: list[dict] | None = None,
+    supplier_parties: list[dict] | None = None,
+    carryover: float = 0.0,
 ) -> tuple[list[dict], float]:
     """
     Build the financial breakdown section from deduction entries,
@@ -1000,15 +1263,21 @@ def _build_financial_breakdown(
 
     Each deduction party becomes a row: amount = weight × rate
     (unless a custom formula applies).
-    For remaining default parties not in deductions, weights are pulled
-    from other_calc_items (Section F / OTHER CALCULATION supplier entries).
+    Supplier sub-parties (Joseph, Sadiq, etc.) always appear.
+    Other-calc parties only appear when they have weight > 0.
     Returns (list_of_rows, grand_total).
     """
     # Custom formulas: party_name → calc(weight, rate)
     CUSTOM_FORMULAS = {
         'Parveen': lambda w, r: round((r - 3) * w, 2),
-        'Anna city': lambda w, r: round((w * 1.5) * (r + 4), 2),
+        'Anna City': lambda w, r: round((w * 1.5) * (r + 4), 2),
         'Saleem Bhai': lambda w, r: round((w * 1.6) * (r + 5), 2),
+    }
+
+    # Parties that use the standard W × PR formula but should show a
+    # blue formula label for clarity.
+    STANDARD_FORMULA_PARTIES = {
+        'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Parveen', 'Masthan',
     }
 
     rows: list[dict] = []
@@ -1049,7 +1318,7 @@ def _build_financial_breakdown(
             formula_label = _get_formula_label(name)
         else:
             amount = round(weight * rate, 2)
-            formula_label = None
+            formula_label = _get_formula_label(name)  # always show label
 
         rows.append({
             "id": ded["id"],
@@ -1064,23 +1333,65 @@ def _build_financial_breakdown(
         grand_total += amount
         seen_names.add(name.lower())
 
-    # 3. Add remaining default parties — pull weight from other_calc_items
-    for party_name in DEFAULT_FINANCIAL_PARTIES:
-        key = party_name.lower()
-        if key in seen_names or party_name == "RMS":
+    # 3a. Supplier sub-parties (Joseph, Sadiq, etc.) — always shown even
+    #     with weight=0 so they never disappear from the breakdown.
+    for sp in (supplier_parties or []):
+        name = (sp.get("name") or "").strip()
+        if not name:
             continue
-        # Look up weight from Other Calculations / Section F
+        key = name.lower()
+        if key in seen_names or key == "rms":
+            continue
         weight = round(other_weight_map.get(key, 0), 3)
-        formula_fn = CUSTOM_FORMULAS.get(party_name)
+        formula_fn = CUSTOM_FORMULAS.get(name)
         if formula_fn and weight > 0:
             amount = formula_fn(weight, rate)
-            formula_label = _get_formula_label(party_name)
         elif weight > 0:
             amount = round(weight * rate, 2)
-            formula_label = None
         else:
             amount = 0
-            formula_label = _get_formula_label(party_name) if party_name in CUSTOM_FORMULAS else None
+        # Always show formula label for supplier sub-parties
+        formula_label = _get_formula_label(name)
+        rows.append({
+            "id": f"default_{name}",
+            "name": name,
+            "weight": weight,
+            "ratePerKg": rate,
+            "amount": amount,
+            "formula": formula_label,
+            "isRms": False,
+            "isCustom": False,
+        })
+        grand_total += amount
+        seen_names.add(key)
+
+    # 3b. Other-calc parties (Section F / OTHER CALCULATION) — only shown
+    #     when they have actual weight > 0.  Preserves the same display
+    #     order as the Other Calculations section and prevents deleted
+    #     parties from reappearing on refresh.
+    for item in (other_calc_items or []):
+        party_name = (item.get("name") or "").strip()
+        if not party_name:
+            continue
+        key = party_name.lower()
+        if key in seen_names or key == "rms":
+            continue
+        weight = round(other_weight_map.get(key, 0), 3)
+        if weight <= 0:
+            continue  # skip parties with no data
+        # School uses a persisted custom rate
+        if party_name == 'School':
+            school_entry = _get_school_custom_rate(date, product_type)
+            custom_rate = school_entry.get("rate", 0) if school_entry else 0
+            amount = round(weight * custom_rate, 2)
+            formula_label = _get_formula_label(party_name)
+        else:
+            formula_fn = CUSTOM_FORMULAS.get(party_name)
+            if formula_fn:
+                amount = formula_fn(weight, rate)
+            else:
+                amount = round(weight * rate, 2)
+            formula_label = _get_formula_label(party_name)
         rows.append({
             "id": f"default_{party_name}",
             "name": party_name,
@@ -1090,8 +1401,10 @@ def _build_financial_breakdown(
             "formula": formula_label,
             "isRms": False,
             "isCustom": False,
+            **({"schoolRate": custom_rate} if party_name == 'School' else {}),
         })
         grand_total += amount
+        seen_names.add(key)
 
     # 4. Custom financial entries (user-added parties)
     custom_entries = get_custom_financial_entries(date, product_type)
@@ -1111,6 +1424,23 @@ def _build_financial_breakdown(
         })
         grand_total += amount
 
+    # 5. Yesterday Stock — always the LAST row.
+    #    Amount = carryover_weight × (PR − 10)
+    carryover_weight = round(carryover, 3)
+    ys_amount = round(carryover_weight * max(rate - 10, 0), 2) if carryover_weight > 0 else 0
+    rows.append({
+        "id": "yesterday_stock_fin",
+        "name": "Yesterday Stock",
+        "weight": carryover_weight,
+        "ratePerKg": rate,
+        "amount": ys_amount,
+        "formula": 'W × (PR-10)',
+        "isRms": False,
+        "isCustom": False,
+        "isYesterdayStock": True,
+    })
+    grand_total += ys_amount
+
     return rows, round(grand_total, 2)
 
 
@@ -1118,10 +1448,19 @@ def _get_formula_label(name: str) -> str | None:
     """Return a human-readable formula label for known custom-formula parties."""
     formulas = {
         'Parveen': '(PR-3) × W',
-        'Anna city': '(W×1.5) × (PR+4)',
+        'Anna City': '(W×1.5) × (PR+4)',
         'Saleem Bhai': '(W×1.6) × (PR+5)',
+        'School': 'W × Custom Rate',
     }
-    return formulas.get(name)
+    # Supplier sub-parties that use standard W × PR
+    STANDARD_FORMULA_PARTIES = {
+        'Thamim', 'Irfan', 'Rajendran', 'BBC', 'Masthan',
+    }
+    if name in formulas:
+        return formulas[name]
+    if name in STANDARD_FORMULA_PARTIES:
+        return 'W × PR'
+    return None
 
 
 # ===================================================================
@@ -1132,7 +1471,30 @@ def _build_supplier_totals(entries: list[dict], rate: float) -> list[dict]:
     """
     Build supplier totals from pre-fetched weight entries.
     Same logic as calculate_supplier_totals but without the extra query.
+    Rows within each supplier are sorted to match the data-entry page order.
     """
+    # Fixed party display order per supplier (matches SupplierManagementPage)
+    _PARTY_ORDER: dict[str, list[str]] = {
+        "joseph": ["RMS", "Thamim", "Irfan", "Rajendran", "BBC", "Parveen"],
+        "sadiq": ["RMS", "Masthan"],
+        "other calculation": [
+            "Anas", "Anna City", "B.Less", "Sk", "RMS",
+            "Saleem Bhai", "Ramesh", "School", "110", "Daas", "Mahendran",
+        ],
+    }
+
+    def _norm(name: str) -> str:
+        """Lowercase, strip spaces/dots for fuzzy matching."""
+        import re
+        return re.sub(r"[\s.]+", "", (name or "")).lower()
+
+    def _sort_key(row_party: str, order: list[str]):
+        norm = _norm(row_party)
+        for i, o in enumerate(order):
+            if _norm(o) == norm:
+                return (0, i)          # in the list → sort by position
+        return (1, row_party.lower())  # not in list → after, alphabetical
+
     supplier_map: dict[str, dict[str, list]] = {}
     party_names: dict[str, str] = {}
 
@@ -1148,6 +1510,7 @@ def _build_supplier_totals(entries: list[dict], rate: float) -> list[dict]:
     for sid, parties in supplier_map.items():
         rows = []
         supplier_total_live_weight = 0.0
+        sname = supplier_names.get(sid, sid)
 
         for pid, weight_entries in parties.items():
             party_load_total = round(sum(e.get("loadWeight", 0) for e in weight_entries), 3)
@@ -1163,9 +1526,17 @@ def _build_supplier_totals(entries: list[dict], rate: float) -> list[dict]:
                 "c": party_live_total,
             })
 
+        # Sort rows by the predefined party order for this supplier
+        order_key = _norm(sname)
+        order_list = next(
+            (v for k, v in _PARTY_ORDER.items() if _norm(k) == order_key), []
+        )
+        if order_list:
+            rows.sort(key=lambda r: _sort_key(r["party"], order_list))
+
         result.append({
             "id": sid,
-            "name": supplier_names.get(sid, sid),
+            "name": sname,
             "rows": rows,
             "totalWeight": round(supplier_total_live_weight, 3),
             "totalValue": round(supplier_total_live_weight * rate, 3),
@@ -1239,21 +1610,35 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     totals = _calculate_totals_overview_prefetched(date, supplier_totals, carryover)
 
     # 4. Financial breakdown — built from deduction entries + other calc items
-    #    Other calc items provide weights for parties not in the deduction list
-    other_items = [
-        {"id": e["id"], "name": e["name"], "value": e["amount"]}
-        for e in sf_entries
-    ]
+    #    Other calc items provide weights for parties not in the deduction list.
+    #    OTHER CALCULATION weight entries first, then Section F entries last
+    #    so that newly-added Section F entries appear at the end.
+    oc_seen_step4: set[str] = set()
+    other_items: list[dict] = []
     for s in other_calc_supplier:
         for row in s["rows"]:
             other_items.append({"id": row["id"], "name": row["party"], "value": row["c"]})
+            oc_seen_step4.add(row["party"].lower())
+    for e in sf_entries:
+        if e["name"].lower() not in oc_seen_step4:
+            other_items.append({"id": e["id"], "name": e["name"], "value": e["amount"]})
+            oc_seen_step4.add(e["name"].lower())
+
+    # Build supplier sub-parties list (Joseph, Sadiq, etc.) for financial
+    # breakdown — these always appear even with weight=0.
+    supplier_sub_parties = []
+    for s in supplier_totals:
+        for row in s["rows"]:
+            party = row.get("party", "")
+            if party and party.lower() != "total":
+                supplier_sub_parties.append({"name": party})
 
     financial, financial_total = _build_financial_breakdown(
         totals.get("deductions", []), rate, date, product_type,
         other_calc_items=other_items,
+        supplier_parties=supplier_sub_parties,
+        carryover=carryover,
     )
-
-    # Get ATB entry (persisted rate)
     atb_entry = get_atb_entry(date, product_type)
     atb_rate = atb_entry["rate"] if atb_entry else 0.0
 
@@ -1292,22 +1677,30 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         for d in totals.get("deductions", [])
     ]
 
-    # 9. Other calculations display — combine Section F entries + Other
-    #    Calculation supplier entries (retail weight only)
-    other_items = [
-        {"id": e["id"], "name": e["name"], "value": e["amount"]}
-        for e in sf_entries
-    ]
+    # 9. Other calculations display — OTHER CALCULATION weight entries first,
+    #    then Section F (manually-added) entries at the end, so new entries
+    #    always appear last.
+    oc_seen: set[str] = set()
+    other_items_disp: list[dict] = []
     for s in other_calc_supplier:
         for row in s["rows"]:
-            other_items.append({
+            other_items_disp.append({
                 "id": row["id"],
                 "name": row["party"],
                 "value": row["c"],  # actual weight (retail)
             })
+            oc_seen.add(row["party"].lower())
+    for e in sf_entries:
+        if e["name"].lower() not in oc_seen:
+            other_items_disp.append({
+                "id": e["id"],
+                "name": e["name"],
+                "value": e["amount"],
+            })
+            oc_seen.add(e["name"].lower())
     other_calc = {
         "title": "Section F",
-        "items": other_items,
+        "items": other_items_disp,
     }
 
     result = {

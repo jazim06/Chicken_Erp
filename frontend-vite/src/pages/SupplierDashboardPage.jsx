@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Plus, Download, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Pencil, Check, Users } from 'lucide-react';
 import { format, addDays, subDays } from 'date-fns';
 import { Button } from '../components/ui/button';
@@ -35,11 +35,13 @@ import {
   createCustomFinancialEntry,
   updateCustomFinancialEntry,
   deleteCustomFinancialEntry,
+  saveSchoolRate,
   getSuppliers,
   getEntriesByDate,
   formatCurrency,
   formatWeight
 } from '../utils/apiAdapter';
+import { useAppContext } from '../context/AppContext';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
@@ -60,9 +62,15 @@ const getDeductionSortIndex = (name) => {
 const SupplierDashboardPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { setLastSupplier } = useAppContext();
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  // Support ?date= query param for navigation from history page
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const dateParam = searchParams.get('date');
+    return dateParam ? new Date(dateParam + 'T00:00:00') : new Date();
+  });
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addFormulaModalOpen, setAddFormulaModalOpen] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -95,6 +103,14 @@ const SupplierDashboardPage = () => {
   const [editingRms, setEditingRms] = useState(false);
   const [rmsValue, setRmsValue] = useState('');
   const [savingRms, setSavingRms] = useState(false);
+
+  // School custom rate editing state
+  const [editingSchoolRate, setEditingSchoolRate] = useState(null); // entry id being edited
+  const [schoolRateValue, setSchoolRateValue] = useState('');
+
+  // Yesterday Stock amount editing state
+  const [editingYsAmount, setEditingYsAmount] = useState(false);
+  const [ysAmountValue, setYsAmountValue] = useState('');
 
   // Financial breakdown local state (editable)
   const [financialEntries, setFinancialEntries] = useState([]);
@@ -165,6 +181,24 @@ const SupplierDashboardPage = () => {
   useEffect(() => {
     loadDashboard();
   }, [id, dateStr]);
+
+  // Track last-viewed supplier for sidebar quick-nav
+  useEffect(() => {
+    const loadAndTrack = async () => {
+      try {
+        const suppliers = await getSuppliers();
+        const match = suppliers.find(s =>
+          s.subParties?.some(() => true) || s.id
+        );
+        // Find correct supplier by comparing route param with supplier's dashboard
+        // The dashboard is shared so we use the first supplier as context
+        if (suppliers.length > 0) {
+          setLastSupplier(suppliers[0].id, suppliers[0].name, suppliers[0].productType);
+        }
+      } catch { /* ignore */ }
+    };
+    loadAndTrack();
+  }, [id]);
 
   // Sync yesterday stock from dashboard data
   useEffect(() => {
@@ -564,8 +598,9 @@ const SupplierDashboardPage = () => {
   // Custom formulas for recalculating amount from weight
   const CUSTOM_FORMULAS = useMemo(() => ({
     'Parveen': (w, r) => Math.round(((r - 3) * w) * 100) / 100,
-    'Anna city': (w, r) => Math.round(((w * 1.5) * (r + 4)) * 100) / 100,
+    'Anna City': (w, r) => Math.round(((w * 1.5) * (r + 4)) * 100) / 100,
     'Saleem Bhai': (w, r) => Math.round(((w * 1.6) * (r + 5)) * 100) / 100,
+    'School': (w, _r, customRate) => Math.round((w * (customRate || 0)) * 100) / 100,
   }), []);
 
   const calculateGrandTotal = () => {
@@ -576,8 +611,9 @@ const SupplierDashboardPage = () => {
     return dashboardData?.financialTotal || 0;
   };
 
-  const recalcAmount = (name, weight, rate) => {
+  const recalcAmount = (name, weight, rate, customRate) => {
     const formula = CUSTOM_FORMULAS[name];
+    if (name === 'School' && formula && weight > 0) return formula(weight, rate, customRate);
     if (formula && weight > 0) return formula(weight, rate);
     return weight > 0 ? Math.round(weight * rate * 100) / 100 : 0;
   };
@@ -586,7 +622,8 @@ const SupplierDashboardPage = () => {
   const handleFinWeightSave = (item) => {
     const newWeight = parseFloat(finWeightValue) || 0;
     const rate = item.ratePerKg || 0;
-    const newAmount = recalcAmount(item.name, newWeight, rate);
+    const customRate = item.schoolRate || 0;
+    const newAmount = recalcAmount(item.name, newWeight, rate, customRate);
     setFinancialEntries(prev =>
       prev.map(e => e.id === item.id ? { ...e, weight: newWeight, amount: newAmount } : e)
     );
@@ -606,6 +643,22 @@ const SupplierDashboardPage = () => {
     // Persist if custom entry
     if (item.isCustom) {
       updateCustomFinancialEntry(item.id, { amount: newAmount }).catch(() => {});
+    }
+  };
+
+  const handleSchoolRateSave = async (item) => {
+    const newRate = parseFloat(schoolRateValue) || 0;
+    const weight = item.weight || 0;
+    const newAmount = Math.round(weight * newRate * 100) / 100;
+    setFinancialEntries(prev =>
+      prev.map(e => e.id === item.id ? { ...e, schoolRate: newRate, amount: newAmount } : e)
+    );
+    setEditingSchoolRate(null);
+    try {
+      await saveSchoolRate(dateStr, newRate);
+      toast.success('School rate saved');
+    } catch (err) {
+      toast.error('Failed to save school rate');
     }
   };
 
@@ -1249,13 +1302,15 @@ const SupplierDashboardPage = () => {
                   <span className="w-6"></span>
                 </div>
                 {financialEntries.map(item => (
-                  <div key={item.id} className="group border-b border-gray-100 hover:bg-gray-50">
+                  <div key={item.id} className={cn("group border-b border-gray-100 hover:bg-gray-50", item.isYesterdayStock && "bg-amber-50/50")}>
                     <div className="flex items-center py-2 text-sm">
                       <span className="text-gray-900 px-2 flex-1">{item.name}</span>
 
                       {/* WEIGHT COLUMN */}
-                      {item.isRms ? (
-                        <span className="text-gray-400 px-2 font-mono text-xs w-24 text-right">—</span>
+                      {item.isRms || item.isYesterdayStock ? (
+                        <span className={cn("px-2 font-mono text-xs w-24 text-right", item.isYesterdayStock ? "text-amber-700" : "text-gray-400")}>
+                          {item.isYesterdayStock && item.weight > 0 ? formatWeight(item.weight) : '—'}
+                        </span>
                       ) : editingFinWeight === item.id ? (
                         <span className="w-24 text-right px-1">
                           <input
@@ -1286,7 +1341,48 @@ const SupplierDashboardPage = () => {
                       )}
 
                       {/* AMOUNT COLUMN */}
-                      {item.isRms ? (
+                      {item.isYesterdayStock ? (
+                        editingYsAmount ? (
+                          <span className="w-28 text-right px-1">
+                            <input
+                              type="number"
+                              value={ysAmountValue}
+                              onChange={(e) => setYsAmountValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  const newAmt = parseFloat(ysAmountValue) || 0;
+                                  setFinancialEntries(prev =>
+                                    prev.map(fe => fe.id === item.id ? { ...fe, amount: newAmt } : fe)
+                                  );
+                                  setEditingYsAmount(false);
+                                }
+                                if (e.key === 'Escape') setEditingYsAmount(false);
+                              }}
+                              onBlur={() => {
+                                const newAmt = parseFloat(ysAmountValue) || 0;
+                                setFinancialEntries(prev =>
+                                  prev.map(fe => fe.id === item.id ? { ...fe, amount: newAmt } : fe)
+                                );
+                                setEditingYsAmount(false);
+                              }}
+                              autoFocus
+                              step="1"
+                              className="w-full h-7 text-right font-mono text-xs border border-amber-400 rounded px-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                            />
+                          </span>
+                        ) : (
+                          <span
+                            className="text-amber-700 px-2 font-mono text-right w-28 cursor-pointer hover:bg-amber-100 rounded"
+                            onClick={() => {
+                              setYsAmountValue(item.amount || '');
+                              setEditingYsAmount(true);
+                            }}
+                            title="Click to edit Yesterday Stock amount"
+                          >
+                            {item.amount > 0 ? formatCurrency(item.amount) : <span className="text-amber-500 italic">enter ₹</span>}
+                          </span>
+                        )
+                      ) : item.isRms ? (
                         editingRms ? (
                           <span className="w-28 text-right px-1">
                             <input
@@ -1369,20 +1465,54 @@ const SupplierDashboardPage = () => {
 
                       {/* REMOVE BUTTON */}
                       <span className="w-6 flex justify-center">
-                        <button
-                          onClick={() => handleRemoveFinEntry(item)}
-                          className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
-                          title="Remove entry"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        {!item.isYesterdayStock && (
+                          <button
+                            onClick={() => handleRemoveFinEntry(item)}
+                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                            title="Remove entry"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </span>
                     </div>
-                    {item.formula && (
-                      <div className="px-2 pb-1.5 -mt-1">
-                        <span className="text-[10px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded font-mono">
-                          ƒ {item.formula}
-                        </span>
+                    {/* Formula label + School rate input */}
+                    {(item.formula || item.name === 'School') && (
+                      <div className="px-2 pb-1.5 -mt-1 flex items-center gap-2">
+                        {item.formula && (
+                          <span className="text-[10px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded font-mono">
+                            ƒ {item.formula}
+                          </span>
+                        )}
+                        {item.name === 'School' && (
+                          editingSchoolRate === item.id ? (
+                            <input
+                              type="number"
+                              value={schoolRateValue}
+                              onChange={(e) => setSchoolRateValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSchoolRateSave(item);
+                                if (e.key === 'Escape') setEditingSchoolRate(null);
+                              }}
+                              onBlur={() => handleSchoolRateSave(item)}
+                              autoFocus
+                              step="1"
+                              placeholder="rate"
+                              className="w-20 h-5 text-[10px] font-mono border border-blue-300 rounded px-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            />
+                          ) : (
+                            <span
+                              className="text-[10px] text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded font-mono cursor-pointer hover:bg-orange-100"
+                              onClick={() => {
+                                setSchoolRateValue(item.schoolRate || '');
+                                setEditingSchoolRate(item.id);
+                              }}
+                              title="Click to set School rate"
+                            >
+                              {item.schoolRate > 0 ? `Rate: ₹${item.schoolRate}` : 'Set rate →'}
+                            </span>
+                          )
+                        )}
                       </div>
                     )}
                   </div>

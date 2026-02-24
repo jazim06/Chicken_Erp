@@ -150,6 +150,26 @@ export const deleteWeightEntry = (id) =>
   api(`/api/weight-entries/${id}`, 'DELETE');
 
 // ===================================================================
+// ENTRY DATES (log history / streak calendar)
+// ===================================================================
+
+export const getEntryDates = (startDate, endDate, supplierId = null) => {
+  let url = `/api/entry-dates?startDate=${startDate}&endDate=${endDate}`;
+  if (supplierId) url += `&supplierId=${supplierId}`;
+  return api(url);
+};
+
+export const getEntryDateDetails = (date) =>
+  api(`/api/entry-dates/${date}/details`);
+
+// ===================================================================
+// ANALYTICS
+// ===================================================================
+
+export const getAnalytics = (startDate, endDate, productType = 'chicken') =>
+  api(`/api/analytics?startDate=${startDate}&endDate=${endDate}&productType=${productType}`);
+
+// ===================================================================
 // DASHBOARD
 // ===================================================================
 
@@ -314,6 +334,13 @@ export const updateRMSEntry = (date, amount, productType = 'chicken') =>
 
 export const updateATBEntry = (date, rate, productType = 'chicken') =>
   api('/api/atb-entries', 'PUT', { date, rate, productType });
+
+// ===================================================================
+// SCHOOL CUSTOM RATE
+// ===================================================================
+
+export const saveSchoolRate = (date, rate, productType = 'chicken') =>
+  api('/api/school-rate', 'PUT', { date, rate, productTypeId: productType });
 
 // ===================================================================
 // CUSTOM FINANCIAL ENTRIES

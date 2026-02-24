@@ -10,6 +10,7 @@ import { SubPartyList } from '../components/SubPartyList';
 import { EntriesTable } from '../components/EntriesTable';
 import { WeightEntryModal } from '../components/WeightEntryModal';
 import { getSupplierById, getEntriesByDate, saveEntry, updateWeightEntry, addSubParty, deleteSubParty, deleteWeightEntry } from '../utils/apiAdapter';
+import { useAppContext } from '../context/AppContext';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
@@ -37,10 +38,14 @@ const SupplierManagementPage = () => {
     }
   }, [selectedDate, supplier]);
 
+  const { setLastSupplier } = useAppContext();
+
   const loadSupplierData = async () => {
     try {
       const data = await getSupplierById(id);
       setSupplier(data);
+      // Track this supplier in the global sidebar context
+      setLastSupplier(data.id, data.name, data.productType);
     } catch (error) {
       console.error('Failed to load supplier:', error);
       toast.error('Failed to load supplier data');

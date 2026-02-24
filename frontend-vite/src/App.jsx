@@ -6,6 +6,10 @@ import ProductSelectPage from './pages/ProductSelectPage';
 import SupplierListPage from './pages/SupplierListPage';
 import SupplierManagementPage from './pages/SupplierManagementPage';
 import SupplierDashboardPage from './pages/SupplierDashboardPage';
+import LogHistoryPage from './pages/LogHistoryPage';
+import AnalyticsPage from './pages/AnalyticsPage';
+import AppLayout from './components/AppLayout';
+import { AppProvider } from './context/AppContext';
 import { getCurrentUser } from './utils/apiAdapter';
 
 // Protected Route Component
@@ -17,45 +21,32 @@ const ProtectedRoute = ({ children }) => {
 function App() {
   return (
     <Router>
-      <div className="App min-h-screen">
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/product-select"
-            element={
-              <ProtectedRoute>
-                <ProductSelectPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/suppliers"
-            element={
-              <ProtectedRoute>
-                <SupplierListPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/supplier/:id"
-            element={
-              <ProtectedRoute>
-                <SupplierManagementPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/supplier/:id/dashboard"
-            element={
-              <ProtectedRoute>
-                <SupplierDashboardPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/" element={<Navigate to="/login" replace />} />
-        </Routes>
-        <Toaster position="top-right" richColors />
-      </div>
+      <AppProvider>
+        <div className="App min-h-screen">
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+
+            {/* All protected routes share the AppLayout (sidebar + content) */}
+            <Route
+              element={
+                <ProtectedRoute>
+                  <AppLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/product-select" element={<ProductSelectPage />} />
+              <Route path="/suppliers" element={<SupplierListPage />} />
+              <Route path="/supplier/:id" element={<SupplierManagementPage />} />
+              <Route path="/supplier/:id/dashboard" element={<SupplierDashboardPage />} />
+              <Route path="/history" element={<LogHistoryPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
+            </Route>
+
+            <Route path="/" element={<Navigate to="/login" replace />} />
+          </Routes>
+          <Toaster position="top-right" richColors />
+        </div>
+      </AppProvider>
     </Router>
   );
 }

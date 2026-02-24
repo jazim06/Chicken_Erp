@@ -61,6 +61,20 @@
         
         /* Transitions */
         --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+        /* Sidebar */
+        --sidebar: 210 45% 12%;
+        --sidebar-foreground: 0 0% 95%;
+        --sidebar-muted: 210 15% 55%;
+        --sidebar-border: 210 30% 20%;
+        --sidebar-hover: 210 30% 18%;
+
+        /* Charts */
+        --chart-1: 27 94% 55%;
+        --chart-2: 200 70% 50%;
+        --chart-3: 150 60% 45%;
+        --chart-4: 280 65% 55%;
+        --chart-5: 340 65% 55%;
     }
     
     .dark {
@@ -84,6 +98,20 @@
         --ring: 27 94% 55%;
         --popover: 210 35% 10%;
         --popover-foreground: 0 0% 98%;
+
+        /* Sidebar — dark mode */
+        --sidebar: 210 45% 6%;
+        --sidebar-foreground: 0 0% 92%;
+        --sidebar-muted: 210 15% 50%;
+        --sidebar-border: 210 30% 14%;
+        --sidebar-hover: 210 30% 12%;
+
+        /* Charts — dark mode */
+        --chart-1: 27 94% 60%;
+        --chart-2: 200 70% 55%;
+        --chart-3: 150 60% 50%;
+        --chart-4: 280 65% 60%;
+        --chart-5: 340 65% 60%;
     }
 }
 

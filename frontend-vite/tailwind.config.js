@@ -55,6 +55,13 @@ module.exports = {
                 border: 'hsl(var(--border))',
                 input: 'hsl(var(--input))',
                 ring: 'hsl(var(--ring))',
+                sidebar: {
+                    DEFAULT: 'hsl(var(--sidebar))',
+                    foreground: 'hsl(var(--sidebar-foreground))',
+                    muted: 'hsl(var(--sidebar-muted))',
+                    border: 'hsl(var(--sidebar-border))',
+                    hover: 'hsl(var(--sidebar-hover))',
+                },
                 chart: {
                     '1': 'hsl(var(--chart-1))',
                     '2': 'hsl(var(--chart-2))',

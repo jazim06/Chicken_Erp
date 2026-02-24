@@ -62,6 +62,9 @@ from services import (
     get_deduction_entries,
     get_deduction_summary,
     get_effective_rate,
+    get_analytics,
+    get_entry_date_details,
+    get_entry_dates,
     get_financial_entries,
     get_section_f_entries,
     get_supplier,
@@ -70,6 +73,7 @@ from services import (
     save_daily_carryover,
     save_atb_entry,
     save_rms_entry,
+    save_school_custom_rate,
     soft_delete_weight_entry,
     update_custom_financial_entry,
     update_deduction_entry,
@@ -559,6 +563,23 @@ async def remove_custom_financial_entry(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+# ===================================================================
+# SCHOOL CUSTOM RATE
+# ===================================================================
+
+@app.put("/api/school-rate")
+async def upsert_school_rate(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Set / update School custom rate for a date."""
+    body = await request.json()
+    date = body.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    product = body.get("productTypeId", "chicken")
+    rate_val = float(body.get("rate", 0))
+    return save_school_custom_rate(date, product, rate_val)
+
+
 @app.put("/api/price-rates")
 async def upsert_price_rate(request: Request, user: dict = Depends(get_current_user)):
     """Set / update today's rate. Creates a new rate doc or updates existing one."""
@@ -634,6 +655,41 @@ async def remove_deduction_entry(entry_id: str, user: dict = Depends(get_current
         return {"success": True}
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ===================================================================
+# ENTRY DATES (log history / streak calendar)
+# ===================================================================
+
+@app.get("/api/entry-dates")
+async def list_entry_dates(
+    startDate: str = Query(..., description="YYYY-MM-DD"),
+    endDate: str = Query(..., description="YYYY-MM-DD"),
+    supplierId: Optional[str] = Query(None),
+):
+    """Return distinct dates that have weight entries in a range."""
+    dates = get_entry_dates(startDate, endDate, supplier_id=supplierId)
+    return {"dates": dates}
+
+
+@app.get("/api/entry-dates/{date}/details")
+async def entry_date_details(date: str):
+    """Brief summary for a single date: supplier count + total weight."""
+    return get_entry_date_details(date)
+
+
+# ===================================================================
+# ANALYTICS
+# ===================================================================
+
+@app.get("/api/analytics")
+async def analytics(
+    startDate: str = Query(..., description="YYYY-MM-DD"),
+    endDate: str = Query(..., description="YYYY-MM-DD"),
+    productType: str = Query("chicken"),
+):
+    """Return aggregated analytics for the given date range."""
+    return get_analytics(startDate, endDate, product_type=productType)
 
 
 @app.post("/api/deduction-entries/bulk", status_code=201)
