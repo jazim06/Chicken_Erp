@@ -16,7 +16,7 @@ from typing import Optional
 
 import sentry_sdk
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -195,7 +195,7 @@ _HARDCODED_USERS = {
 
 @app.post("/api/auth/login")
 @limiter.limit("5/minute")
-async def login(request: Request, body: LoginRequest):
+async def login(request: Request, body: LoginRequest = Body(...)):
     """
     Login — validates credentials, returns a signed JWT token.
     Rate-limited to 5 attempts per minute per IP.
