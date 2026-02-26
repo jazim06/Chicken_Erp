@@ -1,8 +1,10 @@
 """
 Firebase Admin SDK initialization and Firestore client helpers.
-Loads credentials from FIREBASE_CREDENTIALS_PATH env var.
+Loads credentials from FIREBASE_CREDENTIALS_PATH (file path) or
+FIREBASE_SERVICE_ACCOUNT_JSON (inline JSON string for production).
 """
 
+import json
 import os
 import logging
 from functools import lru_cache
@@ -21,11 +23,21 @@ def initialize_firebase() -> firebase_admin.App:
     if _app is not None:
         return _app
 
+    # Option 1: Inline JSON string (production — DigitalOcean env var)
+    firebase_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if firebase_json:
+        service_info = json.loads(firebase_json)
+        cred = credentials.Certificate(service_info)
+        _app = firebase_admin.initialize_app(cred)
+        logger.info("Firebase initialised from FIREBASE_SERVICE_ACCOUNT_JSON env var.")
+        return _app
+
+    # Option 2: File path (local development)
     cred_path = os.environ.get("FIREBASE_CREDENTIALS_PATH")
     if not cred_path:
         raise RuntimeError(
-            "FIREBASE_CREDENTIALS_PATH env var is required. "
-            "Set it to the path of your Firebase service-account JSON file."
+            "Set FIREBASE_CREDENTIALS_PATH (file path) or "
+            "FIREBASE_SERVICE_ACCOUNT_JSON (JSON string) env var."
         )
 
     if not os.path.isfile(cred_path):
@@ -33,7 +45,7 @@ def initialize_firebase() -> firebase_admin.App:
 
     cred = credentials.Certificate(cred_path)
     _app = firebase_admin.initialize_app(cred)
-    logger.info("Firebase Admin SDK initialized successfully.")
+    logger.info("Firebase Admin SDK initialized from file: %s", cred_path)
     return _app
 
 
