@@ -60,7 +60,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: frontend-vite/dist/*
+          source: frontend-vite/build/*
           target: /home/${{ secrets.DEPLOY_USER }}/chicken-erp/frontend-vite
           strip_components: 1
           overwrite: true

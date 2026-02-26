@@ -8,7 +8,7 @@ server {
     server_name 64.227.188.119;   # your droplet IP (replace with domain later)
 
     # ── Frontend (Vite build) ─────────────────────────────
-    root /home/chickenapp/chicken-erp/frontend-vite/dist;
+    root /home/chickenapp/chicken-erp/frontend-vite/build;
     index index.html;
 
     location / {
