@@ -5,8 +5,6 @@ All routes are under /api.  Firebase Auth protects mutations;
 read endpoints are accessible with an optional token.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from contextlib import asynccontextmanager
