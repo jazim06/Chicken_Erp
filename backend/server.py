@@ -16,7 +16,7 @@ from typing import Optional
 
 import sentry_sdk
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -31,7 +31,6 @@ from models import (
     DeductionEntryUpdate,
     FinancialEntryCreate,
     FinancialEntryUpdate,
-    LoginRequest,
     PriceRateCreate,
     ReorderRequest,
     SectionFEntryCreate,
