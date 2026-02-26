@@ -195,13 +195,24 @@ _HARDCODED_USERS = {
 
 @app.post("/api/auth/login")
 @limiter.limit("5/minute")
-async def login(request: Request, body: LoginRequest = Body(...)):
+async def login(request: Request):
     """
     Login — validates credentials, returns a signed JWT token.
     Rate-limited to 5 attempts per minute per IP.
     """
-    user = _HARDCODED_USERS.get(body.email)
-    if not user or user["password"] != body.password:
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+
+    email = data.get("email", "")
+    password = data.get("password", "")
+
+    if not email or not password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="email and password required")
+
+    user = _HARDCODED_USERS.get(email)
+    if not user or user["password"] != password:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -211,7 +222,7 @@ async def login(request: Request, body: LoginRequest = Body(...)):
     token = create_access_token(
         data={
             "uid": user["uid"],
-            "email": body.email,
+            "email": email,
             "name": user["displayName"],
             "role": user["role"],
         }
@@ -219,7 +230,7 @@ async def login(request: Request, body: LoginRequest = Body(...)):
 
     return {
         "uid": user["uid"],
-        "email": body.email,
+        "email": email,
         "displayName": user["displayName"],
         "role": user["role"],
         "token": token,
