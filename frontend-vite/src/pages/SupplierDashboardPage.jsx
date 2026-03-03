@@ -39,7 +39,9 @@ import {
   getSuppliers,
   getEntriesByDate,
   formatCurrency,
-  formatWeight
+  formatWeight,
+  updateSectionFEntry,
+  createSectionFEntry,
 } from '../utils/apiAdapter';
 import { useAppContext } from '../context/AppContext';
 import { toast } from 'sonner';
@@ -69,7 +71,14 @@ const SupplierDashboardPage = () => {
   // Support ?date= query param for navigation from history page
   const [selectedDate, setSelectedDate] = useState(() => {
     const dateParam = searchParams.get('date');
-    return dateParam ? new Date(dateParam + 'T00:00:00') : new Date();
+    if (dateParam) return new Date(dateParam + 'T00:00:00');
+    // Restore last visited date from localStorage
+    const saved = localStorage.getItem('chickenErp_lastDashboardDate');
+    if (saved) {
+      const d = new Date(saved + 'T00:00:00');
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
   });
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addFormulaModalOpen, setAddFormulaModalOpen] = useState(false);
@@ -116,12 +125,19 @@ const SupplierDashboardPage = () => {
   const [financialEntries, setFinancialEntries] = useState([]);
   const [editingFinWeight, setEditingFinWeight] = useState(null); // entry id being edited
   const [editingFinAmount, setEditingFinAmount] = useState(null); // entry id being edited
+  const [editingRetailRate, setEditingRetailRate] = useState(null); // entry id being edited
   const [finWeightValue, setFinWeightValue] = useState('');
   const [finAmountValue, setFinAmountValue] = useState('');
+  const [retailRateValue, setRetailRateValue] = useState('');
   const [addFinPartyName, setAddFinPartyName] = useState('');
   const [showAddFinEntry, setShowAddFinEntry] = useState(false);
 
   const dateStr = format(selectedDate, 'yyyy-MM-dd');
+
+  // Persist selected date to localStorage so it survives refresh
+  useEffect(() => {
+    localStorage.setItem('chickenErp_lastDashboardDate', dateStr);
+  }, [dateStr]);
 
   // Fetch all sub-parties from suppliers and their actual live weights
   useEffect(() => {
@@ -659,6 +675,37 @@ const SupplierDashboardPage = () => {
       toast.success('School rate saved');
     } catch (err) {
       toast.error('Failed to save school rate');
+    }
+  };
+
+  const handleRetailRateSave = async (item) => {
+    const newRate = parseFloat(retailRateValue) || 0;
+    const weight = item.weight || 0;
+    const newAmount = Math.round(weight * newRate * 100) / 100;
+    setFinancialEntries(prev =>
+      prev.map(e => e.id === item.id ? { ...e, ratePerKg: newRate, retailRate: newRate, amount: newAmount } : e)
+    );
+    setEditingRetailRate(null);
+    // Persist retailRate to Section F entry
+    if (!item.isRms && !item.isYesterdayStock && item.isOtherCalc && item.name) {
+      try {
+        if (item.sfEntryId) {
+          // Update existing Section F entry
+          await updateSectionFEntry(item.sfEntryId, { retailRate: newRate });
+        } else {
+          // Create a new Section F entry to store the rate
+          await createSectionFEntry({
+            name: item.name,
+            amount: weight,
+            retailRate: newRate,
+            date: dateStr,
+          });
+        }
+        toast.success('Rate saved');
+      } catch (err) {
+        console.error('Failed to save rate:', err);
+        toast.error('Failed to save rate');
+      }
     }
   };
 
@@ -1297,8 +1344,9 @@ const SupplierDashboardPage = () => {
               <div className="space-y-0.5">
                 <div className="flex items-center py-2 border-b border-gray-200 font-semibold text-xs text-gray-600">
                   <span className="flex-1">NAME</span>
-                  <span className="w-24 text-right">WEIGHT</span>
-                  <span className="w-28 text-right">AMOUNT (₹)</span>
+                  <span className="w-20 text-right">WEIGHT</span>
+                  <span className="w-20 text-right">RATE/KG</span>
+                  <span className="w-24 text-right">AMOUNT (₹)</span>
                   <span className="w-6"></span>
                 </div>
                 {financialEntries.map(item => (
@@ -1337,6 +1385,45 @@ const SupplierDashboardPage = () => {
                           title="Click to edit weight"
                         >
                           {item.weight > 0 ? formatWeight(item.weight) : '—'}
+                        </span>
+                      )}
+
+                      {/* RATE COLUMN */}
+                      {item.isRms || item.isYesterdayStock ? (
+                        <span className={cn("px-2 font-mono text-xs w-20 text-right", item.isYesterdayStock ? "text-amber-700" : "text-gray-400")}>
+                          —
+                        </span>
+                      ) : !item.isOtherCalc || item.formula ? (
+                        /* Deduction / supplier / formula entries: show rate read-only */
+                        <span className="text-gray-400 px-2 font-mono text-xs w-20 text-right">
+                          {item.ratePerKg > 0 ? `₹${item.ratePerKg}` : '—'}
+                        </span>
+                      ) : editingRetailRate === item.id ? (
+                        <span className="w-20 text-right px-1">
+                          <input
+                            type="number"
+                            value={retailRateValue}
+                            onChange={(e) => setRetailRateValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleRetailRateSave(item);
+                              if (e.key === 'Escape') setEditingRetailRate(null);
+                            }}
+                            onBlur={() => handleRetailRateSave(item)}
+                            autoFocus
+                            step="1"
+                            className="w-full h-7 text-right font-mono text-xs border border-blue-300 rounded px-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                        </span>
+                      ) : (
+                        <span
+                          className="text-gray-600 px-2 font-mono text-xs w-20 text-right cursor-pointer hover:bg-blue-50 rounded"
+                          onClick={() => {
+                            setRetailRateValue(item.retailRate || '');
+                            setEditingRetailRate(item.id);
+                          }}
+                          title="Click to edit rate per kg"
+                        >
+                          {item.retailRate > 0 ? `₹${item.retailRate}` : <span className="text-gray-400 italic text-[10px]">set rate</span>}
                         </span>
                       )}
 

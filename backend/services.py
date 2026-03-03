@@ -500,6 +500,7 @@ def create_section_f_entry(data: dict) -> dict:
     }
     doc_id = create_document(SECTION_F_ENTRIES, doc)
     doc["id"] = doc_id
+    cache_invalidate("dashboard:")
     return doc
 
 
@@ -517,6 +518,7 @@ def update_section_f_entry(entry_id: str, data: dict) -> dict:
     if updates:
         update_document(SECTION_F_ENTRIES, entry_id, updates)
     existing.update(updates)
+    cache_invalidate("dashboard:")
     return existing
 
 
@@ -1336,6 +1338,7 @@ def _build_financial_breakdown(
 
     # 3a. Supplier sub-parties (Joseph, Sadiq, etc.) — always shown even
     #     with weight=0 so they never disappear from the breakdown.
+    #     These always use PR rate (with optional custom formulas).
     for sp in (supplier_parties or []):
         name = (sp.get("name") or "").strip()
         if not name:
@@ -1362,6 +1365,7 @@ def _build_financial_breakdown(
             "formula": formula_label,
             "isRms": False,
             "isCustom": False,
+            "isOtherCalc": False,
         })
         grand_total += amount
         seen_names.add(key)
@@ -1396,6 +1400,7 @@ def _build_financial_breakdown(
                 "formula": formula_label,
                 "isRms": False,
                 "isCustom": False,
+                "isOtherCalc": True,
                 "schoolRate": custom_rate,
             })
         # Anna City and Saleem Bhai use formula with PR rate
@@ -1412,11 +1417,14 @@ def _build_financial_breakdown(
                 "formula": formula_label,
                 "isRms": False,
                 "isCustom": False,
+                "isOtherCalc": True,
             })
-        # All other Section F parties use retail rate (or default to PR if not set)
+        # All other Section F parties use retail rate.
+        # If no retailRate is stored, amount = 0 (don't default to PR rate).
         else:
-            retail_rate = item.get("retailRate") or rate
-            amount = round(weight * retail_rate, 2)
+            stored_rate = item.get("retailRate")
+            retail_rate = stored_rate if stored_rate else 0
+            amount = round(weight * retail_rate, 2) if retail_rate > 0 else 0
             rows.append({
                 "id": f"default_{party_name}",
                 "name": party_name,
@@ -1426,7 +1434,9 @@ def _build_financial_breakdown(
                 "formula": None,
                 "isRms": False,
                 "isCustom": False,
-                "retailRate": retail_rate,
+                "isOtherCalc": True,
+                "retailRate": retail_rate if retail_rate > 0 else None,
+                "sfEntryId": item.get("sfEntryId"),
             })
         
         grand_total += amount
@@ -1641,13 +1651,30 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
     #    so that newly-added Section F entries appear at the end.
     oc_seen_step4: set[str] = set()
     other_items: list[dict] = []
+    # Build a lookup of Section F entries by normalised name for retailRate
+    sf_rate_map: dict[str, dict] = {}
+    for e in sf_entries:
+        sf_rate_map[e["name"].lower()] = e
     for s in other_calc_supplier:
         for row in s["rows"]:
-            other_items.append({"id": row["id"], "name": row["party"], "value": row["c"]})
+            sf_match = sf_rate_map.get(row["party"].lower(), {})
+            other_items.append({
+                "id": row["id"],
+                "name": row["party"],
+                "value": row["c"],
+                "retailRate": sf_match.get("retailRate"),
+                "sfEntryId": sf_match.get("id"),
+            })
             oc_seen_step4.add(row["party"].lower())
     for e in sf_entries:
         if e["name"].lower() not in oc_seen_step4:
-            other_items.append({"id": e["id"], "name": e["name"], "value": e["amount"]})
+            other_items.append({
+                "id": e["id"],
+                "name": e["name"],
+                "value": e["amount"],
+                "retailRate": e.get("retailRate"),
+                "sfEntryId": e["id"],
+            })
             oc_seen_step4.add(e["name"].lower())
 
     # Build supplier sub-parties list (Joseph, Sadiq, etc.) for financial
