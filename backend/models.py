@@ -155,6 +155,7 @@ class SectionFEntryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     amount: float
     weight: Optional[float] = None
+    retailRate: Optional[float] = None  # Retail rate per kg (if not using formula)
     date: str
     sortOrder: Optional[int] = None
 
@@ -163,12 +164,27 @@ class SectionFEntryCreate(BaseModel):
     def amount_non_negative(cls, v):
         return round(v, 3)
 
+    @field_validator("retailRate")
+    @classmethod
+    def retail_rate_valid(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("retailRate must be >= 0")
+        return round(v, 2) if v is not None else v
+
 
 class SectionFEntryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     amount: Optional[float] = None
     weight: Optional[float] = None
+    retailRate: Optional[float] = None  # Retail rate per kg
     sortOrder: Optional[int] = None
+
+    @field_validator("retailRate")
+    @classmethod
+    def retail_rate_valid(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("retailRate must be >= 0")
+        return round(v, 2) if v is not None else v
 
 
 class SectionFEntryResponse(BaseModel):
@@ -176,6 +192,7 @@ class SectionFEntryResponse(BaseModel):
     name: str
     amount: float
     weight: Optional[float] = None
+    retailRate: Optional[float] = None  # Retail rate stored in Firestore
     date: str
     sortOrder: int
 

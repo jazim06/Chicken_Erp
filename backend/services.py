@@ -493,6 +493,7 @@ def create_section_f_entry(data: dict) -> dict:
         "name": data["name"],
         "amount": data["amount"],
         "weight": data.get("weight"),
+        "retailRate": data.get("retailRate"),  # Retail rate per kg (for non-formula parties)
         "date": data["date"],
         "sortOrder": data["sortOrder"],
         "createdAt": datetime.now(timezone.utc).isoformat(),
@@ -509,7 +510,7 @@ def update_section_f_entry(entry_id: str, data: dict) -> dict:
         raise LookupError(f"Section F entry {entry_id} not found")
 
     updates = {}
-    for field in ("name", "amount", "weight", "sortOrder"):
+    for field in ("name", "amount", "weight", "retailRate", "sortOrder"):
         if field in data and data[field] is not None:
             updates[field] = data[field]
 
@@ -1366,9 +1367,9 @@ def _build_financial_breakdown(
         seen_names.add(key)
 
     # 3b. Other-calc parties (Section F / OTHER CALCULATION) — only shown
-    #     when they have actual weight > 0.  Preserves the same display
-    #     order as the Other Calculations section and prevents deleted
-    #     parties from reappearing on refresh.
+    #     when they have actual weight > 0.
+    #     Parties with custom formulas use formulas.
+    #     Other parties use retail rate (stored in entry or default to PR rate).
     for item in (other_calc_items or []):
         party_name = (item.get("name") or "").strip()
         if not party_name:
@@ -1379,30 +1380,55 @@ def _build_financial_breakdown(
         weight = round(other_weight_map.get(key, 0), 3)
         if weight <= 0:
             continue  # skip parties with no data
+        
         # School uses a persisted custom rate
         if party_name == 'School':
             school_entry = _get_school_custom_rate(date, product_type)
             custom_rate = school_entry.get("rate", 0) if school_entry else 0
             amount = round(weight * custom_rate, 2)
             formula_label = _get_formula_label(party_name)
-        else:
+            rows.append({
+                "id": f"default_{party_name}",
+                "name": party_name,
+                "weight": weight,
+                "ratePerKg": custom_rate,
+                "amount": amount,
+                "formula": formula_label,
+                "isRms": False,
+                "isCustom": False,
+                "schoolRate": custom_rate,
+            })
+        # Anna City and Saleem Bhai use formula with PR rate
+        elif party_name in {'Anna City', 'Saleem Bhai'}:
             formula_fn = CUSTOM_FORMULAS.get(party_name)
-            if formula_fn:
-                amount = formula_fn(weight, rate)
-            else:
-                amount = round(weight * rate, 2)
+            amount = formula_fn(weight, rate) if formula_fn else round(weight * rate, 2)
             formula_label = _get_formula_label(party_name)
-        rows.append({
-            "id": f"default_{party_name}",
-            "name": party_name,
-            "weight": weight,
-            "ratePerKg": rate,
-            "amount": amount,
-            "formula": formula_label,
-            "isRms": False,
-            "isCustom": False,
-            **({"schoolRate": custom_rate} if party_name == 'School' else {}),
-        })
+            rows.append({
+                "id": f"default_{party_name}",
+                "name": party_name,
+                "weight": weight,
+                "ratePerKg": rate,
+                "amount": amount,
+                "formula": formula_label,
+                "isRms": False,
+                "isCustom": False,
+            })
+        # All other Section F parties use retail rate (or default to PR if not set)
+        else:
+            retail_rate = item.get("retailRate") or rate
+            amount = round(weight * retail_rate, 2)
+            rows.append({
+                "id": f"default_{party_name}",
+                "name": party_name,
+                "weight": weight,
+                "ratePerKg": retail_rate,
+                "amount": amount,
+                "formula": None,
+                "isRms": False,
+                "isCustom": False,
+                "retailRate": retail_rate,
+            })
+        
         grand_total += amount
         seen_names.add(key)
 
