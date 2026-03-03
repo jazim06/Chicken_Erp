@@ -22,7 +22,7 @@ from slowapi.util import get_remote_address
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import create_access_token, get_current_user, get_optional_user
-from cache import cache_stats
+from cache import cache_stats, cache_invalidate
 from firebase_client import initialize_firebase
 from models import (
     DeductionEntryCreate,
@@ -379,13 +379,29 @@ async def set_carryover(
     """
     Manually set the daily carryover (Yesterday Stock) for a given date.
     Body: { "date": "YYYY-MM-DD", "balance": 123.456 }
+    
+    When you set carryover for date X, you're setting Yesterday Stock for date X+1.
+    So we need to invalidate BOTH:
+      - Cache for date X (the day being set)
+      - Cache for date X+1 (the next day that uses this carryover)
     """
+    from datetime import datetime, timedelta
+    
     body = await request.json()
     date = body.get("date")
     balance = float(body.get("balance", 0))
     if not date:
         raise HTTPException(status_code=400, detail="date is required")
+    
     save_daily_carryover(date, balance)
+    
+    # Calculate next day
+    next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # Invalidate both cache keys
+    cache_invalidate(f"dashboard:chicken:{date}")
+    cache_invalidate(f"dashboard:chicken:{next_date}")
+    
     return {"success": True, "date": date, "balance": balance}
 
 
