@@ -4,15 +4,14 @@ import { User } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 
-export const SupplierCard = ({ supplier, isAddNew = false }) => {
+export const SupplierCard = ({ supplier, isAddNew = false, onAddNew }) => {
   const navigate = useNavigate();
 
   const handleClick = () => {
     if (!isAddNew) {
       navigate(`/supplier/${supplier.id}`);
-    } else {
-      // Handle add new supplier
-      console.log('Add new supplier');
+    } else if (onAddNew) {
+      onAddNew();
     }
   };
 

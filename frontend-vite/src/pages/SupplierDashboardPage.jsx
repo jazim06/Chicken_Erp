@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Download, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Pencil, Check, Users } from 'lucide-react';
+import { ArrowLeft, Plus, Download, X, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Pencil, Check, Users, TrendingUp, Wallet, AlertTriangle, RefreshCw } from 'lucide-react';
 import { format, addDays, subDays } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
@@ -117,9 +117,9 @@ const SupplierDashboardPage = () => {
   const [editingSchoolRate, setEditingSchoolRate] = useState(null); // entry id being edited
   const [schoolRateValue, setSchoolRateValue] = useState('');
 
-  // Yesterday Stock amount editing state
-  const [editingYsAmount, setEditingYsAmount] = useState(false);
-  const [ysAmountValue, setYsAmountValue] = useState('');
+  // Today Stock weight editing state
+  const [editingTsWeight, setEditingTsWeight] = useState(false);
+  const [tsWeightValue, setTsWeightValue] = useState('');
 
   // Financial breakdown local state (editable)
   const [financialEntries, setFinancialEntries] = useState([]);
@@ -220,7 +220,9 @@ const SupplierDashboardPage = () => {
   useEffect(() => {
     if (dashboardData) {
       const stockItem = dashboardData.totalsOverview?.find(i => i.id === 'yesterday_stock');
-      setYesterdayStock(stockItem?.total || 0);
+      // Always store as string to avoid type mismatch with controlled input
+      const stockValue = stockItem?.total !== undefined ? String(stockItem.total) : '0';
+      setYesterdayStock(stockValue);
       // Sync ATB rate from persisted data
       if (dashboardData.atbRate) {
         setAtbRate(String(dashboardData.atbRate));
@@ -289,14 +291,22 @@ const SupplierDashboardPage = () => {
     setSavingStock(true);
     try {
       const prevDate = format(subDays(selectedDate, 1), 'yyyy-MM-dd');
-      await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
+      const balance = parseFloat(value) || 0;
+      
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
-        body: JSON.stringify({ date: prevDate, balance: parseFloat(value) || 0 }),
+        body: JSON.stringify({ date: prevDate, balance }),
       });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
       await loadDashboard();
       toast.success('Yesterday stock updated');
-    } catch {
+    } catch (error) {
+      console.error('Failed to save yesterday stock:', error);
       toast.error('Failed to save yesterday stock');
     } finally {
       setSavingStock(false);
@@ -634,6 +644,45 @@ const SupplierDashboardPage = () => {
     return weight > 0 ? Math.round(weight * rate * 100) / 100 : 0;
   };
 
+  // ── Hero Card Computations ──
+  const prRate = dashboardData?.effectivePrRate || 0;
+  const totalWeight = dashboardData?.totalBalance || 0;
+  const financialTotal = calculateGrandTotal();
+  const profitValue = totalWeight * prRate - financialTotal;
+  const atbAmount = totalWeight * (parseFloat(atbRate) || 0);
+  const rmsEntry = financialEntries.find(e => e.isRms);
+  const rmsAmount = rmsEntry?.amount || 0;
+  const shortageValue = atbAmount - rmsAmount;
+
+  // ── F (Other Section) Computation ──
+  const fWeight = Math.round(otherTotal * 1.5 * 1000) / 1000;
+
+  // ── Save Today Stock Weight ──
+  const handleSaveTodayStockWeight = async (value) => {
+    const newWeight = parseFloat(value) || 0;
+    const rate = dashboardData?.effectivePrRate || 0;
+    const newAmount = Math.round(newWeight * Math.max(rate - 10, 0) * 100) / 100;
+    // Update local state immediately
+    setFinancialEntries(prev =>
+      prev.map(fe => fe.id === 'today_stock_fin' ? { ...fe, weight: newWeight, amount: newAmount } : fe)
+    );
+    setEditingTsWeight(false);
+
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
+        body: JSON.stringify({ date: dateStr, today_stock_weight: newWeight }),
+      });
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      await loadDashboard();
+      toast.success('Today stock weight saved');
+    } catch (error) {
+      console.error('Failed to save today stock weight:', error);
+      toast.error('Failed to save today stock weight');
+    }
+  };
+
   // Handlers for financial entry editing
   const handleFinWeightSave = (item) => {
     const newWeight = parseFloat(finWeightValue) || 0;
@@ -687,7 +736,7 @@ const SupplierDashboardPage = () => {
     );
     setEditingRetailRate(null);
     // Persist retailRate to Section F entry
-    if (!item.isRms && !item.isYesterdayStock && item.isOtherCalc && item.name) {
+    if (!item.isRms && !item.isTodayStock && item.isOtherCalc && item.name) {
       try {
         if (item.sfEntryId) {
           // Update existing Section F entry
@@ -791,9 +840,9 @@ const SupplierDashboardPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-gray-50 to-blue-50">
       {/* Top Bar */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 h-16">
+      <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-b border-gray-200/60 h-16 shadow-sm">
         <div className="max-w-[1400px] mx-auto px-6 h-full flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
@@ -844,6 +893,22 @@ const SupplierDashboardPage = () => {
               className="h-8 w-8 p-0"
             >
               <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const today = new Date();
+                setSelectedDate(today);
+                // If already on today, force reload
+                if (format(selectedDate, 'yyyy-MM-dd') === format(today, 'yyyy-MM-dd')) {
+                  loadDashboard();
+                }
+              }}
+              title="Refresh to today"
+              className="h-8 w-8 p-0 ml-1"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>
 
@@ -901,6 +966,63 @@ const SupplierDashboardPage = () => {
 
       {/* Main Content */}
       <div className="max-w-[1400px] mx-auto px-6 py-6">
+        {/* ── Hero Summary Cards ── */}
+        <div className="grid grid-cols-3 gap-5 mb-6">
+          {/* Profit Card */}
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-700 p-5 text-white shadow-lg shadow-emerald-500/20">
+            <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10" />
+            <div className="absolute -right-2 -top-2 h-16 w-16 rounded-full bg-white/10" />
+            <div className="relative">
+              <div className="flex items-center gap-2 mb-1">
+                <TrendingUp className="h-4 w-4 opacity-80" />
+                <span className="text-xs font-medium uppercase tracking-wider opacity-80">Profit</span>
+              </div>
+              <p className="text-3xl font-bold font-mono tracking-tight">
+                {formatCurrency(profitValue)}
+              </p>
+              <p className="text-xs opacity-70 mt-1.5 font-mono">
+                {formatWeight(totalWeight)} × ₹{prRate} − {formatCurrency(financialTotal)}
+              </p>
+            </div>
+          </div>
+
+          {/* ATB Card */}
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 p-5 text-white shadow-lg shadow-blue-500/20">
+            <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10" />
+            <div className="absolute -right-2 -top-2 h-16 w-16 rounded-full bg-white/10" />
+            <div className="relative">
+              <div className="flex items-center gap-2 mb-1">
+                <Wallet className="h-4 w-4 opacity-80" />
+                <span className="text-xs font-medium uppercase tracking-wider opacity-80">Amount To Be</span>
+              </div>
+              <p className="text-3xl font-bold font-mono tracking-tight">
+                {atbAmount > 0 ? formatCurrency(atbAmount) : '₹0'}
+              </p>
+              <p className="text-xs opacity-70 mt-1.5 font-mono">
+                {formatWeight(totalWeight)} × ₹{parseFloat(atbRate) || 0}
+              </p>
+            </div>
+          </div>
+
+          {/* Shortage Card */}
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 p-5 text-white shadow-lg shadow-amber-500/20">
+            <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10" />
+            <div className="absolute -right-2 -top-2 h-16 w-16 rounded-full bg-white/10" />
+            <div className="relative">
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle className="h-4 w-4 opacity-80" />
+                <span className="text-xs font-medium uppercase tracking-wider opacity-80">Shortage</span>
+              </div>
+              <p className="text-3xl font-bold font-mono tracking-tight">
+                {formatCurrency(Math.abs(shortageValue))}
+              </p>
+              <p className="text-xs opacity-70 mt-1.5 font-mono">
+                {formatCurrency(atbAmount)} − {formatCurrency(rmsAmount)}
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div className="grid grid-cols-[1.1fr_1.3fr_1fr] gap-6">
           {/* LEFT COLUMN */}
           <div className="space-y-6">
@@ -911,7 +1033,7 @@ const SupplierDashboardPage = () => {
 
             {/* Joseph Card */}
             {dashboardData?.suppliers?.map((supplier) => (
-              <Card key={supplier.id} className="p-4 shadow-sm">
+              <Card key={supplier.id} className="p-4 shadow-sm rounded-xl border-gray-100 hover:shadow-md transition-shadow">
                 <h3 className="text-sm font-semibold text-gray-900 mb-3">{supplier.name}</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -966,7 +1088,7 @@ const SupplierDashboardPage = () => {
             ))}
 
             {/* Other Calculations Card */}
-            <Card className="p-4 shadow-sm">
+            <Card className="p-4 shadow-sm rounded-xl border-gray-100 hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   OTHER CALCULATIONS
@@ -1009,7 +1131,7 @@ const SupplierDashboardPage = () => {
 
           {/* CENTER COLUMN */}
           <div className="space-y-6">
-            <Card className="p-4 shadow-sm">
+            <Card className="p-4 shadow-sm rounded-xl border-gray-100">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Totals Overview</h2>
               </div>
@@ -1104,12 +1226,12 @@ const SupplierDashboardPage = () => {
                 
                 {/* Deductions List */}
                 <div className="space-y-3 max-h-[500px] overflow-y-auto">
-                  {selectedDeductions.length === 0 ? (
+                  {selectedDeductions.filter(d => d.partyName !== 'F').length === 0 ? (
                     <div className="p-3 rounded-lg bg-gray-50 border border-dashed text-center">
                       <p className="text-xs text-gray-500">No weight adjustments added yet</p>
                     </div>
                   ) : (
-                    selectedDeductions.map(deduction => {
+                    selectedDeductions.filter(d => d.partyName !== 'F').map(deduction => {
                       const adj = parseFloat(deduction.adjustmentAmount || 0);
                       const finalWeight = deduction.originalWeight + 
                         (deduction.adjustmentType === '+' ? adj : -adj);
@@ -1222,6 +1344,17 @@ const SupplierDashboardPage = () => {
                   )}
                 </div>
                 
+                {/* F = Other Section Total × 1.5 */}
+                <div className="mt-3 p-3 rounded-lg border-2 border-purple-200 bg-purple-50/50">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-sm font-semibold text-purple-800">F (Other Section)</p>
+                    <span className="font-mono text-sm font-bold text-purple-700">{formatWeight(fWeight)} kg</span>
+                  </div>
+                  <p className="text-xs text-purple-600 font-mono">
+                    {formatWeight(otherTotal)} × 1.5 = {formatWeight(fWeight)}
+                  </p>
+                </div>
+
                 {/* Total Deductions Summary */}
                 <div className="flex items-center justify-between py-2 bg-red-50 font-bold text-sm rounded mt-3">
                   <span className="px-2 text-red-600 uppercase text-xs tracking-wider">Total Adjustments</span>
@@ -1233,19 +1366,20 @@ const SupplierDashboardPage = () => {
             </Card>
 
             {/* Total Balance Card */}
-            <Card className="p-6 shadow-sm bg-gradient-to-br from-gray-50 to-white border border-gray-200">
+            <Card className="p-6 shadow-md rounded-xl bg-gradient-to-br from-slate-50 to-white border border-gray-200">
               <div className="text-center space-y-2">
-                <p className="text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                <p className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
                   Total Balance
                 </p>
                 <p className="text-4xl font-bold text-gray-900 font-mono">
                   {formatWeight(dashboardData?.totalBalance || 0)}
                 </p>
+                <p className="text-xs text-gray-400">kg</p>
               </div>
             </Card>
 
             {/* ATB (Amount To Be Paid) Card */}
-            <Card className="p-6 shadow-sm bg-gradient-to-br from-green-50 to-white border-2 border-green-200">
+            <Card className="p-6 shadow-md rounded-xl bg-gradient-to-br from-green-50 to-white border-2 border-green-200">
               <div className="text-center space-y-3">
                 <p className="text-sm font-semibold text-green-700 uppercase tracking-wider">
                   Amount To Be Paid (ATB)
@@ -1296,7 +1430,7 @@ const SupplierDashboardPage = () => {
 
           {/* RIGHT COLUMN */}
           <div className="space-y-6">
-            <Card className="p-4 shadow-sm">
+            <Card className="p-4 shadow-sm rounded-xl border-gray-100">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">Financial Breakdown</h2>
                 <Button
@@ -1350,15 +1484,44 @@ const SupplierDashboardPage = () => {
                   <span className="w-6"></span>
                 </div>
                 {financialEntries.map(item => (
-                  <div key={item.id} className={cn("group border-b border-gray-100 hover:bg-gray-50", item.isYesterdayStock && "bg-amber-50/50")}>
+                  <div key={item.id} className={cn("group border-b border-gray-100 hover:bg-gray-50", item.isTodayStock && "bg-emerald-50/50")}>
                     <div className="flex items-center py-2 text-sm">
                       <span className="text-gray-900 px-2 flex-1">{item.name}</span>
 
                       {/* WEIGHT COLUMN */}
-                      {item.isRms || item.isYesterdayStock ? (
-                        <span className={cn("px-2 font-mono text-xs w-24 text-right", item.isYesterdayStock ? "text-amber-700" : "text-gray-400")}>
-                          {item.isYesterdayStock && item.weight > 0 ? formatWeight(item.weight) : '—'}
+                      {item.isRms ? (
+                        <span className="px-2 font-mono text-xs w-24 text-right text-gray-400">
+                          —
                         </span>
+                      ) : item.isTodayStock ? (
+                        editingTsWeight ? (
+                          <span className="w-24 text-right px-1">
+                            <input
+                              type="number"
+                              value={tsWeightValue}
+                              onChange={(e) => setTsWeightValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSaveTodayStockWeight(tsWeightValue);
+                                if (e.key === 'Escape') setEditingTsWeight(false);
+                              }}
+                              onBlur={() => handleSaveTodayStockWeight(tsWeightValue)}
+                              autoFocus
+                              step="0.001"
+                              className="w-full h-7 text-right font-mono text-xs border border-emerald-400 rounded px-1 focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                            />
+                          </span>
+                        ) : (
+                          <span
+                            className="text-emerald-700 px-2 font-mono text-xs w-24 text-right cursor-pointer hover:bg-emerald-50 rounded font-semibold"
+                            onClick={() => {
+                              setTsWeightValue(item.weight || '');
+                              setEditingTsWeight(true);
+                            }}
+                            title="Click to enter Today Stock weight"
+                          >
+                            {item.weight > 0 ? formatWeight(item.weight) : <span className="text-emerald-500 italic text-[10px]">enter kg</span>}
+                          </span>
+                        )
                       ) : editingFinWeight === item.id ? (
                         <span className="w-24 text-right px-1">
                           <input
@@ -1389,9 +1552,13 @@ const SupplierDashboardPage = () => {
                       )}
 
                       {/* RATE COLUMN */}
-                      {item.isRms || item.isYesterdayStock ? (
-                        <span className={cn("px-2 font-mono text-xs w-20 text-right", item.isYesterdayStock ? "text-amber-700" : "text-gray-400")}>
+                      {item.isRms ? (
+                        <span className="px-2 font-mono text-xs w-20 text-right text-gray-400">
                           —
+                        </span>
+                      ) : item.isTodayStock ? (
+                        <span className="px-2 font-mono text-xs w-20 text-right text-emerald-600">
+                          ₹{Math.max((dashboardData?.effectivePrRate || 0) - 10, 0)}
                         </span>
                       ) : !item.isOtherCalc || item.formula ? (
                         /* Deduction / supplier / formula entries: show rate read-only */
@@ -1428,47 +1595,10 @@ const SupplierDashboardPage = () => {
                       )}
 
                       {/* AMOUNT COLUMN */}
-                      {item.isYesterdayStock ? (
-                        editingYsAmount ? (
-                          <span className="w-28 text-right px-1">
-                            <input
-                              type="number"
-                              value={ysAmountValue}
-                              onChange={(e) => setYsAmountValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  const newAmt = parseFloat(ysAmountValue) || 0;
-                                  setFinancialEntries(prev =>
-                                    prev.map(fe => fe.id === item.id ? { ...fe, amount: newAmt } : fe)
-                                  );
-                                  setEditingYsAmount(false);
-                                }
-                                if (e.key === 'Escape') setEditingYsAmount(false);
-                              }}
-                              onBlur={() => {
-                                const newAmt = parseFloat(ysAmountValue) || 0;
-                                setFinancialEntries(prev =>
-                                  prev.map(fe => fe.id === item.id ? { ...fe, amount: newAmt } : fe)
-                                );
-                                setEditingYsAmount(false);
-                              }}
-                              autoFocus
-                              step="1"
-                              className="w-full h-7 text-right font-mono text-xs border border-amber-400 rounded px-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
-                            />
-                          </span>
-                        ) : (
-                          <span
-                            className="text-amber-700 px-2 font-mono text-right w-28 cursor-pointer hover:bg-amber-100 rounded"
-                            onClick={() => {
-                              setYsAmountValue(item.amount || '');
-                              setEditingYsAmount(true);
-                            }}
-                            title="Click to edit Yesterday Stock amount"
-                          >
-                            {item.amount > 0 ? formatCurrency(item.amount) : <span className="text-amber-500 italic">enter ₹</span>}
-                          </span>
-                        )
+                      {item.isTodayStock ? (
+                        <span className="text-emerald-700 px-2 font-mono text-right w-28 font-semibold">
+                          {item.amount > 0 ? formatCurrency(item.amount) : '₹0'}
+                        </span>
                       ) : item.isRms ? (
                         editingRms ? (
                           <span className="w-28 text-right px-1">
@@ -1552,7 +1682,7 @@ const SupplierDashboardPage = () => {
 
                       {/* REMOVE BUTTON */}
                       <span className="w-6 flex justify-center">
-                        {!item.isYesterdayStock && (
+                        {!item.isTodayStock && (
                           <button
                             onClick={() => handleRemoveFinEntry(item)}
                             className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
@@ -1608,7 +1738,7 @@ const SupplierDashboardPage = () => {
             </Card>
 
             {/* Grand Total Card */}
-            <Card className="p-6 shadow-sm bg-gradient-to-br from-green-50 to-white border border-green-200">
+            <Card className="p-6 shadow-md rounded-xl bg-gradient-to-br from-green-50 to-white border border-green-200">
               <div className="text-center space-y-3">
                 <p className="text-sm font-semibold text-gray-600 uppercase tracking-wider">
                   Grand Total

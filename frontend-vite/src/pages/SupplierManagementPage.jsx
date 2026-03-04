@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, LayoutDashboard, Calendar as CalendarIcon } from 'lucide-react';
+import { ArrowLeft, LayoutDashboard, Calendar as CalendarIcon, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 import { Button } from '../components/ui/button';
 import { Calendar } from '../components/ui/calendar';
@@ -284,6 +284,23 @@ const SupplierManagementPage = () => {
                   />
                 </PopoverContent>
               </Popover>
+
+              {/* Refresh / Today Button */}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  setSelectedDate(new Date());
+                  // If already on today, force a reload
+                  if (format(selectedDate, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')) {
+                    loadEntries();
+                  }
+                }}
+                title="Refresh to today"
+                className="shrink-0"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
 
               {/* Dashboard Button */}
               <Button

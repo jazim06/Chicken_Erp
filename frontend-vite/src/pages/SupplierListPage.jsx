@@ -3,7 +3,16 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, LayoutDashboard } from 'lucide-react';
 import { SupplierCard } from '../components/SupplierCard';
 import { Button } from '../components/ui/button';
-import { getSuppliers } from '../utils/apiAdapter';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog';
+import { getSuppliers, createSupplier } from '../utils/apiAdapter';
+import { toast } from 'sonner';
 
 const SupplierListPage = () => {
   const navigate = useNavigate();
@@ -11,21 +20,45 @@ const SupplierListPage = () => {
   const productType = searchParams.get('product');
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const loadSuppliers = async () => {
+    try {
+      const data = await getSuppliers(productType);
+      setSuppliers(data);
+    } catch (error) {
+      console.error('Failed to load suppliers:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const loadSuppliers = async () => {
-      try {
-        const data = await getSuppliers(productType);
-        setSuppliers(data);
-      } catch (error) {
-        console.error('Failed to load suppliers:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     loadSuppliers();
   }, [productType]);
+
+  const handleAddSupplier = async () => {
+    const name = newSupplierName.trim();
+    if (!name) {
+      toast.error('Please enter a supplier name');
+      return;
+    }
+    setSaving(true);
+    try {
+      await createSupplier({ name: name.toUpperCase(), productType: productType || 'chicken' });
+      toast.success(`Supplier "${name.toUpperCase()}" created`);
+      setAddModalOpen(false);
+      setNewSupplierName('');
+      await loadSuppliers();
+    } catch (error) {
+      console.error('Failed to create supplier:', error);
+      toast.error('Failed to create supplier');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background py-8 px-4">
@@ -74,10 +107,55 @@ const SupplierListPage = () => {
             {suppliers.map((supplier) => (
               <SupplierCard key={supplier.id} supplier={supplier} />
             ))}
-            <SupplierCard isAddNew />
+            <SupplierCard isAddNew onAddNew={() => setAddModalOpen(true)} />
           </div>
         )}
       </div>
+
+      {/* Add Supplier Modal */}
+      <Dialog open={addModalOpen} onOpenChange={setAddModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Add New Supplier</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Supplier Name</Label>
+              <Input
+                value={newSupplierName}
+                onChange={(e) => setNewSupplierName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddSupplier()}
+                placeholder="Enter supplier name"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Product Type</Label>
+              <Input
+                value={(productType || 'chicken').toUpperCase()}
+                disabled
+                className="bg-muted"
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => { setAddModalOpen(false); setNewSupplierName(''); }}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAddSupplier}
+                className="flex-1 bg-primary hover:bg-primary-hover"
+                disabled={!newSupplierName.trim() || saving}
+              >
+                {saving ? 'Creating...' : 'Create Supplier'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

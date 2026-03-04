@@ -234,6 +234,8 @@ def soft_delete_weight_entry(entry_id: str) -> None:
     if not existing:
         raise LookupError(f"Weight entry {entry_id} not found")
     update_document(WEIGHT_ENTRIES, entry_id, {"isDeleted": True})
+    # Invalidate cached weight entries so subsequent fetches reflect the deletion
+    cache_invalidate("weight_entries")
 
 
 def get_weight_entries(date: str, supplier_id: str | None = None) -> list[dict]:
@@ -319,13 +321,11 @@ def calculate_supplier_totals(date: str, rate: float) -> list[dict]:
 # TOTALS OVERVIEW — Running Balance
 # ===================================================================
 
-def _get_previous_day_carryover(date: str) -> float:
+def _get_previous_day_carryover(date: str) -> tuple[float, float | None]:
     """
     M.Iruppu = yesterday's remaining stock (totalBalance).
-    Query previous day's section-f entry named 'Iruppu', or compute from
-    yesterday's dashboard. For simplicity, store daily carryover in a
-    dedicated collection or derive from yesterday's totalBalance.
-    Here we look at yesterday's financial_entries to derive it.
+    Returns (carryover_weight, manual_ys_amount).
+    manual_ys_amount is the user-overridden ₹ amount (or None if not set).
     """
     prev_date = (
         datetime.strptime(date, "%Y-%m-%d") - timedelta(days=1)
@@ -337,8 +337,10 @@ def _get_previous_day_carryover(date: str) -> float:
         filters=[("date", "==", prev_date)],
     )
     if docs:
-        return docs[0].get("balance", 0.0)
-    return 0.0
+        balance = docs[0].get("balance", 0.0)
+        ys_amount = docs[0].get("ys_amount", None)
+        return balance, ys_amount
+    return 0.0, None
 
 
 def calculate_totals_overview(
@@ -353,7 +355,7 @@ def calculate_totals_overview(
     """
     # Sum of all supplier live weights
     available = sum(s["totalWeight"] for s in supplier_totals)
-    carryover = _get_previous_day_carryover(date)
+    carryover, _manual_ys = _get_previous_day_carryover(date)
     subtotal = round(available + carryover, 3)
 
     # Deductions
@@ -887,7 +889,7 @@ def get_deduction_summary(date: str, product_type: str = "chicken") -> dict:
         ),
         3,
     )
-    carryover = _get_previous_day_carryover(date)
+    carryover, manual_ys = _get_previous_day_carryover(date)
     subtotal = round(available + carryover, 3)
     total_balance = round(subtotal - total_deductions, 3)
 
@@ -912,6 +914,9 @@ def get_deduction_summary(date: str, product_type: str = "chicken") -> dict:
         other_calc_items=other_calc_items,
         supplier_parties=supplier_sub_parties,
         carryover=carryover,
+        manual_ys_amount=manual_ys,
+        total_balance=total_balance,
+        today_stock_weight=_get_today_stock_weight(date),
     )
 
     return {
@@ -984,11 +989,12 @@ def get_analytics(
         rate = get_effective_rate(product_type, dt)
         date_entries = entries_by_date.get(dt, [])
         other_calc_items = _get_other_calc_items(dt, date_entries)
-        dt_carryover = _get_previous_day_carryover(dt)
+        dt_carryover, dt_manual_ys = _get_previous_day_carryover(dt)
         _, grand_total = _build_financial_breakdown(
             date_deductions, rate, dt, product_type,
             other_calc_items=other_calc_items,
             carryover=dt_carryover,
+            manual_ys_amount=dt_manual_ys,
         )
         daily_revenue[dt] = round(grand_total, 2)
 
@@ -1237,14 +1243,32 @@ def delete_sub_party(supplier_id: str, sub_party_id: str) -> None:
 # DAILY CARRYOVER
 # ===================================================================
 
-def save_daily_carryover(date: str, balance: float) -> None:
-    """Store the end-of-day balance for carryover to next day."""
+def save_daily_carryover(date: str, balance: float | None = None, ys_amount: float | None = None, today_stock_weight: float | None = None) -> None:
+    """Store the end-of-day balance, manual YS amount, and/or today stock weight."""
+    docs = list_documents("daily_carryover", filters=[("date", "==", date)])
+    update_fields = {}
+    if balance is not None:
+        update_fields["balance"] = balance
+    if ys_amount is not None:
+        update_fields["ys_amount"] = ys_amount
+    if today_stock_weight is not None:
+        update_fields["today_stock_weight"] = today_stock_weight
+    if docs:
+        update_document("daily_carryover", docs[0]["id"], update_fields)
+    else:
+        update_fields["date"] = date
+        if "balance" not in update_fields:
+            update_fields["balance"] = 0.0
+        create_document("daily_carryover", update_fields)
+    cache_invalidate("dashboard:")
+
+
+def _get_today_stock_weight(date: str) -> float:
+    """Retrieve the manually-entered today stock weight for a given date."""
     docs = list_documents("daily_carryover", filters=[("date", "==", date)])
     if docs:
-        update_document("daily_carryover", docs[0]["id"], {"balance": balance})
-    else:
-        create_document("daily_carryover", {"date": date, "balance": balance})
-    cache_invalidate("dashboard:")
+        return docs[0].get("today_stock_weight", 0.0)
+    return 0.0
 
 
 # ===================================================================
@@ -1259,6 +1283,9 @@ def _build_financial_breakdown(
     other_calc_items: list[dict] | None = None,
     supplier_parties: list[dict] | None = None,
     carryover: float = 0.0,
+    manual_ys_amount: float | None = None,
+    total_balance: float = 0.0,
+    today_stock_weight: float = 0.0,
 ) -> tuple[list[dict], float]:
     """
     Build the financial breakdown section from deduction entries,
@@ -1460,22 +1487,22 @@ def _build_financial_breakdown(
         })
         grand_total += amount
 
-    # 5. Yesterday Stock — always the LAST row.
-    #    Amount = carryover_weight × (PR − 10)
-    carryover_weight = round(carryover, 3)
-    ys_amount = round(carryover_weight * max(rate - 10, 0), 2) if carryover_weight > 0 else 0
+    # 5. Today Stock — always the LAST row.
+    #    Weight is manually entered by the user; amount = weight × (PR − 10)
+    ts_weight = round(today_stock_weight, 3)
+    ts_amount = round(ts_weight * max(rate - 10, 0), 2) if ts_weight > 0 else 0
     rows.append({
-        "id": "yesterday_stock_fin",
-        "name": "Yesterday Stock",
-        "weight": carryover_weight,
+        "id": "today_stock_fin",
+        "name": "Today Stock",
+        "weight": ts_weight,
         "ratePerKg": rate,
-        "amount": ys_amount,
+        "amount": ts_amount,
         "formula": 'W × (PR-10)',
         "isRms": False,
         "isCustom": False,
-        "isYesterdayStock": True,
+        "isTodayStock": True,
     })
-    grand_total += ys_amount
+    grand_total += ts_amount
 
     return rows, round(grand_total, 2)
 
@@ -1635,7 +1662,7 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         rate = f_rate.result()
         all_weight_entries = f_weight.result()
         sf_entries = f_sf.result()
-        carryover = f_carry.result()
+        carryover, manual_ys_amount = f_carry.result()
 
     # 2. Supplier totals built from pre-fetched weight entries (no extra query)
     all_supplier_totals = _build_supplier_totals(all_weight_entries, rate)
@@ -1691,6 +1718,9 @@ def get_dashboard(date: str, product_type: str = "chicken") -> dict:
         other_calc_items=other_items,
         supplier_parties=supplier_sub_parties,
         carryover=carryover,
+        manual_ys_amount=manual_ys_amount,
+        total_balance=totals["totalBalance"],
+        today_stock_weight=_get_today_stock_weight(date),
     )
     atb_entry = get_atb_entry(date, product_type)
     atb_rate = atb_entry["rate"] if atb_entry else 0.0

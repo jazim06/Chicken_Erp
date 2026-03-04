@@ -367,7 +367,7 @@ async def confirm_dashboard(
     Uses the current totalBalance as tomorrow's M.Iruppu.
     """
     dashboard = get_dashboard(date, product_type=productType)
-    save_daily_carryover(date, dashboard["totalBalance"])
+    save_daily_carryover(date, balance=dashboard["totalBalance"])
     return {"confirmed": True, "carryover": dashboard["totalBalance"]}
 
 
@@ -378,7 +378,10 @@ async def set_carryover(
 ):
     """
     Manually set the daily carryover (Yesterday Stock) for a given date.
-    Body: { "date": "YYYY-MM-DD", "balance": 123.456 }
+    Body: { "date": "YYYY-MM-DD", "balance": 123.456, "ys_amount": 1000 }
+    
+    balance = carryover weight (kg)
+    ys_amount = manual Yesterday Stock ₹ amount override (optional)
     
     When you set carryover for date X, you're setting Yesterday Stock for date X+1.
     So we need to invalidate BOTH:
@@ -387,22 +390,41 @@ async def set_carryover(
     """
     from datetime import datetime, timedelta
     
-    body = await request.json()
-    date = body.get("date")
-    balance = float(body.get("balance", 0))
-    if not date:
-        raise HTTPException(status_code=400, detail="date is required")
-    
-    save_daily_carryover(date, balance)
-    
-    # Calculate next day
-    next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    # Invalidate both cache keys
-    cache_invalidate(f"dashboard:chicken:{date}")
-    cache_invalidate(f"dashboard:chicken:{next_date}")
-    
-    return {"success": True, "date": date, "balance": balance}
+    try:
+        body = await request.json()
+        date = body.get("date")
+        
+        if not date:
+            raise HTTPException(status_code=400, detail="date is required")
+        
+        # Validate date format
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid date format: {date}. Expected YYYY-MM-DD")
+        
+        # Extract optional fields
+        balance = float(body["balance"]) if "balance" in body else None
+        ys_amount = float(body["ys_amount"]) if "ys_amount" in body else None
+        today_stock_weight = float(body["today_stock_weight"]) if "today_stock_weight" in body else None
+        
+        logger.info(f"Saving carryover for {date}: balance={balance}, ys_amount={ys_amount}, today_stock_weight={today_stock_weight}")
+        save_daily_carryover(date, balance=balance, ys_amount=ys_amount, today_stock_weight=today_stock_weight)
+        
+        # Calculate next day
+        next_date = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        # Invalidate both cache keys
+        cache_invalidate(f"dashboard:chicken:{date}")
+        cache_invalidate(f"dashboard:chicken:{next_date}")
+        logger.info(f"Cache invalidated for dates: {date}, {next_date}")
+        
+        return {"success": True, "date": date, "balance": balance, "ys_amount": ys_amount, "today_stock_weight": today_stock_weight}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving carryover: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to save carryover: {str(e)}")
 
 
 # ===================================================================
