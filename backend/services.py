@@ -528,8 +528,11 @@ def delete_section_f_entry(entry_id: str) -> None:
     """Delete a Section F entry."""
     existing = get_document(SECTION_F_ENTRIES, entry_id)
     if not existing:
+        # Entry may already be removed while dashboard cache is stale.
+        cache_invalidate("dashboard:")
         raise LookupError(f"Section F entry {entry_id} not found")
     delete_document(SECTION_F_ENTRIES, entry_id)
+    cache_invalidate("dashboard:")
 
 
 def get_section_f_entries(date: str) -> list[dict]:

@@ -43,6 +43,7 @@ import {
   formatWeight,
   updateSectionFEntry,
   createSectionFEntry,
+  deleteSectionFEntry,
 } from '../utils/apiAdapter';
 import { useAppContext } from '../context/AppContext';
 import { toast } from 'sonner';
@@ -775,16 +776,50 @@ const SupplierDashboardPage = () => {
     }
   };
 
+  const isPersistedOtherCalcEntry = (entry) =>
+    Boolean(entry?.isOtherCalc && entry?.sfEntryId);
+
+  const canDeleteFinancialEntry = (entry) =>
+    Boolean(
+      entry?.isCustom ||
+      (isPersistedOtherCalcEntry(entry) &&
+        dashboardData?.otherCalculations?.items?.some(
+          (item) =>
+            item?.id === entry?.sfEntryId &&
+            (item?.name || '').toLowerCase() === (entry?.name || '').toLowerCase()
+        ))
+    );
+
+  const canDeleteOtherCalcItem = (item) =>
+    financialEntries.some(
+      (entry) =>
+        entry?.isOtherCalc &&
+        entry?.sfEntryId === item?.id &&
+        (entry?.name || '').toLowerCase() === (item?.name || '').toLowerCase()
+    );
+
   const handleRemoveFinEntry = async (item) => {
-    if (item.isCustom) {
-      try {
+    try {
+      if (item.isCustom) {
         await deleteCustomFinancialEntry(item.id);
-        toast.success(`Removed ${item.name}`);
-      } catch (err) {
-        toast.error('Failed to remove entry');
+      } else if (canDeleteFinancialEntry(item)) {
+        await deleteSectionFEntry(item.sfEntryId);
+      } else {
+        toast.error('This entry is linked to supplier data and cannot be deleted');
+        return;
       }
+
+      await loadDashboard();
+      toast.success(`Removed ${item.name}`);
+    } catch (err) {
+      const message = String(err?.message || '').toLowerCase();
+      if (message.includes('not found')) {
+        await loadDashboard();
+        toast.success(`${item.name} is already removed`);
+        return;
+      }
+      toast.error('Failed to remove entry');
     }
-    setFinancialEntries(prev => prev.filter(e => e.id !== item.id));
   };
 
   const calculateTotalBalance = () => {
@@ -1098,15 +1133,40 @@ const SupplierDashboardPage = () => {
                 {dashboardData?.otherCalculations?.items?.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center justify-between py-2 border-b border-gray-100 text-xs"
+                    className="group flex items-center justify-between py-2 border-b border-gray-100 text-xs"
                   >
                     <span className="text-gray-900">{item.name}</span>
-                    <EditableCell
-                      value={item.value}
-                      type="other"
-                      itemId={item.id}
-                      field="value"
-                    />
+                    <div className="flex items-center gap-2">
+                      <EditableCell
+                        value={item.value}
+                        type="other"
+                        itemId={item.id}
+                        field="value"
+                      />
+                      {canDeleteOtherCalcItem(item) && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await deleteSectionFEntry(item.id);
+                              await loadDashboard();
+                              toast.success(`Removed ${item.name}`);
+                            } catch (err) {
+                              const message = String(err?.message || '').toLowerCase();
+                              if (message.includes('not found')) {
+                                await loadDashboard();
+                                toast.success(`${item.name} is already removed`);
+                                return;
+                              }
+                              toast.error('Failed to remove entry');
+                            }
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
+                          title="Remove entry"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
                 <div className="flex items-center justify-between py-2 bg-gray-50 font-bold text-xs rounded mt-2 px-2">
@@ -1670,7 +1730,7 @@ const SupplierDashboardPage = () => {
 
                       {/* REMOVE BUTTON */}
                       <span className="w-6 flex justify-center">
-                        {!item.isTodayStock && (
+                        {!item.isTodayStock && canDeleteFinancialEntry(item) && (
                           <button
                             onClick={() => handleRemoveFinEntry(item)}
                             className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-opacity"
