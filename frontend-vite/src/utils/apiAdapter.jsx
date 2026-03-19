@@ -19,11 +19,14 @@ const rawApiBase =
 const API_BASE = (() => {
   if (typeof window === 'undefined') return rawApiBase;
 
-  // On HTTPS pages, block insecure/localhost API targets and use same-origin.
-  if (window.location.protocol === 'https:') {
-    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(rawApiBase);
-    const isInsecureRemote = /^http:\/\//i.test(rawApiBase);
-    if (isLocalhost || isInsecureRemote) return '';
+  // Block localhost/insecure API targets when running from a remote origin.
+  // Always use same-origin if API base looks like localhost or dev-only config.
+  const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(rawApiBase);
+  const isInsecureRemote = /^http:\/\//i.test(rawApiBase);
+  const isRemoteOrigin = !/^(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(window.location.hostname);
+  
+  if (isRemoteOrigin && (isLocalhost || isInsecureRemote)) {
+    return '';
   }
 
   return rawApiBase;
