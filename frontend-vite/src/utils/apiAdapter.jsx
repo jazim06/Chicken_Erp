@@ -9,7 +9,25 @@
 // Config
 // ---------------------------------------------------------------------------
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+const rawApiBase =
+  import.meta.env.VITE_API_BASE_URL !== undefined
+    ? import.meta.env.VITE_API_BASE_URL
+    : import.meta.env.DEV
+      ? 'http://localhost:8000'
+      : '';
+
+const API_BASE = (() => {
+  if (typeof window === 'undefined') return rawApiBase;
+
+  // On HTTPS pages, block insecure/localhost API targets and use same-origin.
+  if (window.location.protocol === 'https:') {
+    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(rawApiBase);
+    const isInsecureRemote = /^http:\/\//i.test(rawApiBase);
+    if (isLocalhost || isInsecureRemote) return '';
+  }
+
+  return rawApiBase;
+})();
 
 // Dev token stored after login
 let _authToken = localStorage.getItem('authToken') || null;
@@ -181,6 +199,9 @@ export const getDashboardData = async (_supplierId, date) => {
 
 export const confirmDashboard = (date, productType = 'chicken') =>
   api(`/api/dashboard/confirm?date=${date}&productType=${productType}`, 'POST');
+
+export const setCarryover = (data) =>
+  api('/api/carryover', 'PUT', data);
 
 // ===================================================================
 // FINANCIAL ENTRIES

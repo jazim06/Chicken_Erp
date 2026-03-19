@@ -36,6 +36,7 @@ import {
   updateCustomFinancialEntry,
   deleteCustomFinancialEntry,
   saveSchoolRate,
+  setCarryover,
   getSuppliers,
   getEntriesByDate,
   formatCurrency,
@@ -292,16 +293,8 @@ const SupplierDashboardPage = () => {
     try {
       const prevDate = format(subDays(selectedDate, 1), 'yyyy-MM-dd');
       const balance = parseFloat(value) || 0;
-      
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
-        body: JSON.stringify({ date: prevDate, balance }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
+
+      await setCarryover({ date: prevDate, balance });
       
       await loadDashboard();
       toast.success('Yesterday stock updated');
@@ -669,12 +662,7 @@ const SupplierDashboardPage = () => {
     setEditingTsWeight(false);
 
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/carryover`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
-        body: JSON.stringify({ date: dateStr, today_stock_weight: newWeight }),
-      });
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      await setCarryover({ date: dateStr, today_stock_weight: newWeight });
       await loadDashboard();
       toast.success('Today stock weight saved');
     } catch (error) {
