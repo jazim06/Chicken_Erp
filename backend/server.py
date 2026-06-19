@@ -23,7 +23,8 @@ from starlette.middleware.cors import CORSMiddleware
 
 from auth import create_access_token, get_current_user, get_optional_user
 from cache import cache_stats, cache_invalidate
-from firebase_client import initialize_firebase
+from db import init_db
+from repository import list_documents, update_document
 from models import (
     DeductionEntryCreate,
     DeductionEntryUpdate,
@@ -107,10 +108,10 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[f"{_rate_per_min}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    initialize_firebase()
-    logger.info("Firebase initialised — server ready.")
+    init_db()
+    logger.info("Database connected — server ready.")
     yield
-    # Shutdown (nothing to close for Firestore)
+    # Shutdown (connection pool is closed by the engine)
 
 
 app = FastAPI(title="Chicken ERP API", lifespan=lifespan)
@@ -634,21 +635,15 @@ async def upsert_price_rate(request: Request, user: dict = Depends(get_current_u
     date = body.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     product = body.get("productTypeId", "chicken")
 
-    # Try to find existing rate for this exact date
-    from firebase_client import get_firestore_client
-    from google.cloud.firestore_v1.base_query import FieldFilter
-    db = get_firestore_client()
-    existing = (
-        db.collection("price_rates")
-        .where(filter=FieldFilter("productTypeId", "==", product))
-        .where(filter=FieldFilter("effectiveFrom", "==", date))
-        .limit(1)
-        .stream()
+    # Try to find an existing rate for this exact effective date
+    existing = list_documents(
+        "price_rates",
+        filters=[("productTypeId", "==", product), ("effectiveFrom", "==", date)],
+        limit=1,
     )
-    doc = next(existing, None)
-    if doc:
-        db.collection("price_rates").document(doc.id).update({"ratePerKg": rate_val})
-        return {"id": doc.id, "ratePerKg": rate_val, "updated": True}
+    if existing:
+        update_document("price_rates", existing[0]["id"], {"ratePerKg": rate_val})
+        return {"id": existing[0]["id"], "ratePerKg": rate_val, "updated": True}
     else:
         doc_id = create_price_rate({
             "productTypeId": product,

@@ -53,6 +53,9 @@ const SheetContent = React.forwardRef(({ side = "right", className, children, ..
         <span className="sr-only">Close</span>
       </SheetPrimitive.Close>
       {children}
+      {/* a11y: satisfies Radix's required description (silences the
+          "Missing Description / aria-describedby" warning). */}
+      <SheetPrimitive.Description className="sr-only" />
     </SheetPrimitive.Content>
   </SheetPortal>
 ))

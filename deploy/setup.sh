@@ -54,8 +54,8 @@ sudo -u "$APP_USER" bash -c "source venv/bin/activate && pip install -r requirem
 if [ ! -f ".env" ]; then
     echo "→ Creating backend .env (you MUST fill in secrets afterward)"
     sudo -u "$APP_USER" tee .env > /dev/null <<'ENVEOF'
-# ── Firebase (paste your entire service-account JSON as one line) ──
-FIREBASE_SERVICE_ACCOUNT_JSON=
+# ── Database (Supabase Postgres — Connect → Session pooler URI) ──
+DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
 
 # ── Auth ──
 JWT_SECRET_KEY=CHANGE_ME_TO_RANDOM_64_CHARS
@@ -71,7 +71,7 @@ RATE_LIMIT_PER_MINUTE=60
 ENVEOF
     echo ""
     echo "⚠️  IMPORTANT: Edit /home/$APP_USER/chicken-erp/backend/.env"
-    echo "   and fill in FIREBASE_SERVICE_ACCOUNT_JSON, JWT_SECRET_KEY, etc."
+    echo "   and fill in DATABASE_URL, JWT_SECRET_KEY, etc."
     echo ""
 fi
 

@@ -64,7 +64,6 @@ const SupplierManagementPage = () => {
     setLoadingEntries(true);
     try {
       const dateStr = format(selectedDate, 'yyyy-MM-dd');
-      console.log(`Loading entries for date: ${dateStr}, supplier: ${id}`);
       const data = await getEntriesByDate(id, dateStr);
       setEntries(data || []);
     } catch (error) {

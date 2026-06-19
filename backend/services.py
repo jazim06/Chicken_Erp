@@ -12,15 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from cache import cache_get, cache_set, cache_invalidate
-from firebase_client import (
+from repository import (
     create_document,
-    get_collection,
     get_document,
     list_documents,
     update_document,
     delete_document,
     batch_update,
-    get_firestore_client,
+    upsert,
 )
 
 logger = logging.getLogger(__name__)
@@ -458,13 +457,10 @@ def reorder_financial_entries(items: list[dict]) -> None:
     Batch-update sortOrder for financial entries.
     items: [{"id": "...", "sortOrder": 1}, ...]
     """
-    db = get_firestore_client()
-    batch = db.batch()
-    col = db.collection(FINANCIAL_ENTRIES)
-    for item in items:
-        ref = col.document(item["id"])
-        batch.update(ref, {"sortOrder": item["sortOrder"]})
-    batch.commit()
+    batch_update(
+        FINANCIAL_ENTRIES,
+        [{"id": item["id"], "sortOrder": item["sortOrder"]} for item in items],
+    )
 
 
 def get_financial_entries(date: str, section: str = "MAIN") -> list[dict]:
@@ -567,28 +563,11 @@ def get_rms_entry(date: str, product_type: str = "chicken") -> dict | None:
 
 def save_rms_entry(date: str, product_type: str, amount: float) -> dict:
     """Create or update an RMS amount entry for a date (stores ₹ directly)."""
-    db = get_firestore_client()
-    from google.cloud.firestore_v1.base_query import FieldFilter
-    existing = list(
-        db.collection(RMS_ENTRIES)
-        .where(filter=FieldFilter("date", "==", date))
-        .where(filter=FieldFilter("productType", "==", product_type))
-        .limit(1)
-        .stream()
+    result = upsert(
+        RMS_ENTRIES,
+        {"date": date, "productType": product_type},
+        {"amount": amount},
     )
-    doc = next(iter(existing), None)
-    if doc:
-        db.collection(RMS_ENTRIES).document(doc.id).update({"amount": amount})
-        result = {"id": doc.id, "date": date, "productType": product_type, "amount": amount}
-    else:
-        doc_data = {
-            "date": date,
-            "productType": product_type,
-            "amount": amount,
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
-        doc_id = create_document(RMS_ENTRIES, doc_data)
-        result = {"id": doc_id, **doc_data}
     cache_invalidate("rms:")
     cache_invalidate("dashboard:")
     return result
@@ -615,28 +594,11 @@ def get_atb_entry(date: str, product_type: str = "chicken") -> dict | None:
 
 def save_atb_entry(date: str, product_type: str, rate: float) -> dict:
     """Create or update an ATB rate entry for a date."""
-    db = get_firestore_client()
-    from google.cloud.firestore_v1.base_query import FieldFilter
-    existing = list(
-        db.collection(ATB_ENTRIES)
-        .where(filter=FieldFilter("date", "==", date))
-        .where(filter=FieldFilter("productType", "==", product_type))
-        .limit(1)
-        .stream()
+    result = upsert(
+        ATB_ENTRIES,
+        {"date": date, "productType": product_type},
+        {"rate": rate},
     )
-    doc = next(iter(existing), None)
-    if doc:
-        db.collection(ATB_ENTRIES).document(doc.id).update({"rate": rate})
-        result = {"id": doc.id, "date": date, "productType": product_type, "rate": rate}
-    else:
-        doc_data = {
-            "date": date,
-            "productType": product_type,
-            "rate": rate,
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
-        doc_id = create_document(ATB_ENTRIES, doc_data)
-        result = {"id": doc_id, **doc_data}
     cache_invalidate("atb:")
     cache_invalidate("dashboard:")
     return result
@@ -663,30 +625,11 @@ def _get_school_custom_rate(date: str, product_type: str = "chicken") -> dict | 
 
 def save_school_custom_rate(date: str, product_type: str, custom_rate: float) -> dict:
     """Create or update the School custom rate for a date."""
-    db = get_firestore_client()
-    from google.cloud.firestore_v1.base_query import FieldFilter
-    existing = list(
-        db.collection(SCHOOL_RATE_ENTRIES)
-        .where(filter=FieldFilter("date", "==", date))
-        .where(filter=FieldFilter("productType", "==", product_type))
-        .limit(1)
-        .stream()
+    result = upsert(
+        SCHOOL_RATE_ENTRIES,
+        {"date": date, "productType": product_type},
+        {"rate": custom_rate},
     )
-    doc = next(iter(existing), None)
-    if doc:
-        db.collection(SCHOOL_RATE_ENTRIES).document(doc.id).update({
-            "rate": custom_rate,
-        })
-        result = {"id": doc.id, "date": date, "productType": product_type, "rate": custom_rate}
-    else:
-        doc_data = {
-            "date": date,
-            "productType": product_type,
-            "rate": custom_rate,
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
-        doc_id = create_document(SCHOOL_RATE_ENTRIES, doc_data)
-        result = {"id": doc_id, **doc_data}
     cache_invalidate("school_rate:")
     cache_invalidate("dashboard:")
     return result
@@ -729,10 +672,8 @@ def create_custom_financial_entry(data: dict) -> dict:
 
 def update_custom_financial_entry(entry_id: str, data: dict) -> dict:
     """Update weight/amount of a custom financial entry."""
-    db = get_firestore_client()
-    doc_ref = db.collection(CUSTOM_FINANCIAL_ENTRIES).document(entry_id)
-    doc = doc_ref.get()
-    if not doc.exists:
+    existing = get_document(CUSTOM_FINANCIAL_ENTRIES, entry_id)
+    if not existing:
         raise LookupError(f"Custom financial entry {entry_id} not found")
     updates = {}
     if "weight" in data:
@@ -740,8 +681,8 @@ def update_custom_financial_entry(entry_id: str, data: dict) -> dict:
     if "amount" in data:
         updates["amount"] = float(data["amount"])
     if updates:
-        doc_ref.update(updates)
-    result = {"id": entry_id, **doc.to_dict(), **updates}
+        update_document(CUSTOM_FINANCIAL_ENTRIES, entry_id, updates)
+    result = {**existing, **updates}
     cache_invalidate("custom_fin:")
     cache_invalidate("dashboard:")
     return result
@@ -749,12 +690,10 @@ def update_custom_financial_entry(entry_id: str, data: dict) -> dict:
 
 def delete_custom_financial_entry(entry_id: str) -> None:
     """Delete a custom financial entry."""
-    db = get_firestore_client()
-    doc_ref = db.collection(CUSTOM_FINANCIAL_ENTRIES).document(entry_id)
-    doc = doc_ref.get()
-    if not doc.exists:
+    existing = get_document(CUSTOM_FINANCIAL_ENTRIES, entry_id)
+    if not existing:
         raise LookupError(f"Custom financial entry {entry_id} not found")
-    doc_ref.delete()
+    delete_document(CUSTOM_FINANCIAL_ENTRIES, entry_id)
     cache_invalidate("custom_fin:")
     cache_invalidate("dashboard:")
 
@@ -952,17 +891,14 @@ def get_analytics(
         return cached
 
     # --- fetch all weight entries in the window -----------------------
-    db = get_firestore_client()
-    ref = db.collection(WEIGHT_ENTRIES)
-    query = ref.where("date", ">=", start_date).where("date", "<=", end_date)
-    docs = query.stream()
-    entries = []
-    for d in docs:
-        rec = d.to_dict()
-        if rec.get("isDeleted"):
-            continue
-        rec["id"] = d.id
-        entries.append(rec)
+    entries = [
+        e
+        for e in list_documents(
+            WEIGHT_ENTRIES,
+            filters=[("date", ">=", start_date), ("date", "<=", end_date)],
+        )
+        if not e.get("isDeleted")
+    ]
 
     # --- supplier name lookup -----------------------------------------
     supplier_names = _get_supplier_names()
@@ -973,17 +909,14 @@ def get_analytics(
         entries_by_date.setdefault(e.get("date", ""), []).append(e)
 
     # --- fetch all deduction entries in the window --------------------
-    ded_ref = db.collection(DEDUCTION_ENTRIES)
-    ded_query = ded_ref.where("date", ">=", start_date).where("date", "<=", end_date)
-    ded_docs = ded_query.stream()
     deductions_by_date: dict[str, list[dict]] = {}
-    for dd in ded_docs:
-        drec = dd.to_dict()
+    for drec in list_documents(
+        DEDUCTION_ENTRIES,
+        filters=[("date", ">=", start_date), ("date", "<=", end_date)],
+    ):
         if drec.get("isDeleted"):
             continue
-        drec["id"] = dd.id
-        ddt = drec.get("date", "")
-        deductions_by_date.setdefault(ddt, []).append(drec)
+        deductions_by_date.setdefault(drec.get("date", ""), []).append(drec)
 
     # --- compute Grand Total per day (same as dashboard) --------------
     daily_revenue: dict[str, float] = {}
@@ -1098,17 +1031,11 @@ def get_entry_dates(
 
     Optionally filtered by a single supplier.
     """
-    db = get_firestore_client()
-    col = db.collection(WEIGHT_ENTRIES)
-    q = col.where("date", ">=", start_date).where("date", "<=", end_date)
+    filters = [("date", ">=", start_date), ("date", "<=", end_date)]
     if supplier_id:
-        q = q.where("supplierId", "==", supplier_id)
-    docs = q.stream()
-    dates = set()
-    for doc in docs:
-        d = doc.to_dict()
-        if not d.get("isDeleted"):
-            dates.add(d["date"])
+        filters.append(("supplierId", "==", supplier_id))
+    rows = list_documents(WEIGHT_ENTRIES, filters=filters)
+    dates = {r["date"] for r in rows if not r.get("isDeleted")}
     return sorted(dates)
 
 
